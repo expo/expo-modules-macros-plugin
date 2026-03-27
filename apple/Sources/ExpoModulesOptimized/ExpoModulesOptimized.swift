@@ -16,4 +16,4 @@
 /// @convention(block) closures for maximum performance.
 @attached(peer, names: arbitrary)
 public macro OptimizedFunction() =
-  #externalMacro(module: "ExpoModulesOptimizedMacros", type: "OptimizedFunctionAttachedMacro")
+  #externalMacro(module: "ExpoModulesMacros", type: "OptimizedFunctionAttachedMacro")

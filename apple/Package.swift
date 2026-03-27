@@ -5,32 +5,25 @@ import CompilerPluginSupport
 import PackageDescription
 
 let package = Package(
-  name: "ExpoModulesOptimized",
-  platforms: [.macOS(.v10_15)],
-  products: [
-    .executable(
-      name: "ExpoModulesOptimized",
-      targets: ["ExpoModulesOptimized"]
-    )
-  ],
+  name: "ExpoModulesMacros",
+  platforms: [.macOS(.v13)],
+  products: [],
   dependencies: [
     .package(url: "https://github.com/swiftlang/swift-syntax.git", from: "602.0.0-latest")
   ],
   targets: [
     .macro(
-      name: "ExpoModulesOptimizedMacros",
+      name: "ExpoModulesMacros",
       dependencies: [
         .product(name: "SwiftSyntaxMacros", package: "swift-syntax"),
         .product(name: "SwiftCompilerPlugin", package: "swift-syntax"),
       ]
     ),
 
-    .executableTarget(name: "ExpoModulesOptimized", dependencies: ["ExpoModulesOptimizedMacros"]),
-
     .testTarget(
-      name: "ExpoModulesOptimizedTests",
+      name: "ExpoModulesMacrosTests",
       dependencies: [
-        "ExpoModulesOptimizedMacros",
+        "ExpoModulesMacros",
         .product(name: "SwiftSyntaxMacrosTestSupport", package: "swift-syntax"),
       ]
     ),
