@@ -1,0 +1,4 @@
+.gitattributes
+
+/apple/.build/**/*
+/apple/Tests/**/*
