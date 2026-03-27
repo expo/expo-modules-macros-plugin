@@ -17,4 +17,9 @@ Pod::Spec.new do |s|
   }
   s.source         = { git: 'https://github.com/expo/expo-module-optimized-macros-plugin.git' }
   s.source_files   = 'Sources/ExpoModulesOptimized/**/*.swift'
+
+  # A stub test_spec is required for expo/expo native-tests to install this pod as a dependency.
+  s.test_spec 'Tests' do |test_spec|
+    test_spec.source_files = 'PodTests/**/*.swift'
+  end
 end
