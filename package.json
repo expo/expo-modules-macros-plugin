@@ -1,6 +1,6 @@
 {
   "name": "@expo/expo-module-optimized-macros-plugin",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "description": "Swift macro plugin for optimized Expo module function definitions",
   "license": "MIT",
   "author": "650 Industries, Inc.",
