@@ -25,6 +25,7 @@ let package = Package(
       dependencies: [
         "ExpoModulesMacros",
         .product(name: "SwiftSyntaxMacrosTestSupport", package: "swift-syntax"),
+        .product(name: "SwiftSyntaxMacrosGenericTestSupport", package: "swift-syntax"),
       ]
     ),
   ]
