@@ -90,6 +90,7 @@ struct ExpoModuleMacroTests {
       """,
       expandedSource: """
         final class MyModule: Module {
+          @JavaScriptActor
           func greet(name: String) -> String { "Hi" }
 
           public func _exposedDefinition() -> [AnyDefinition] {
@@ -140,6 +141,7 @@ struct ExpoModuleMacroTests {
       """,
       expandedSource: """
         final class MyModule: Module {
+          @JavaScriptActor
           var status: String { "ok" }
 
           public func _exposedDefinition() -> [AnyDefinition] {
@@ -172,7 +174,9 @@ struct ExpoModuleMacroTests {
       """,
       expandedSource: """
         final class MyModule: Module {
+          @JavaScriptActor
           func greet(name: String) -> String { "Hi" }
+          @JavaScriptActor
           var status: String { "ok" }
 
           func notExposed() {}
@@ -184,6 +188,85 @@ struct ExpoModuleMacroTests {
               Property("status") {
                 self.status
               }
+            ]
+          }
+        }
+        """
+    )
+  }
+
+  @Test
+  func `nonisolated members are not stamped with @JavaScriptActor`() {
+    assertExpansion(
+      """
+      @ExpoModule
+      final class MyModule: Module {
+        @JS
+        nonisolated func compute() -> Int { 42 }
+      }
+      """,
+      expandedSource: """
+        final class MyModule: Module {
+          nonisolated func compute() -> Int { 42 }
+
+          public func _exposedDefinition() -> [AnyDefinition] {
+            return [
+              Name("MyModule"),
+              Function("compute", compute)
+            ]
+          }
+        }
+        """
+    )
+  }
+
+  @Test
+  func `members already on a global actor are not stamped`() {
+    assertExpansion(
+      """
+      @ExpoModule
+      final class MyModule: Module {
+        @JS
+        @MainActor
+        func uiOnly() -> Int { 0 }
+      }
+      """,
+      expandedSource: """
+        final class MyModule: Module {
+          @MainActor
+          func uiOnly() -> Int { 0 }
+
+          public func _exposedDefinition() -> [AnyDefinition] {
+            return [
+              Name("MyModule"),
+              Function("uiOnly", uiOnly)
+            ]
+          }
+        }
+        """
+    )
+  }
+
+  @Test
+  func `members of an actor-isolated class are not stamped`() {
+    assertExpansion(
+      """
+      @ExpoModule
+      @MainActor
+      final class MyModule: Module {
+        @JS
+        func uiOnly() -> Int { 0 }
+      }
+      """,
+      expandedSource: """
+        @MainActor
+        final class MyModule: Module {
+          func uiOnly() -> Int { 0 }
+
+          public func _exposedDefinition() -> [AnyDefinition] {
+            return [
+              Name("MyModule"),
+              Function("uiOnly", uiOnly)
             ]
           }
         }

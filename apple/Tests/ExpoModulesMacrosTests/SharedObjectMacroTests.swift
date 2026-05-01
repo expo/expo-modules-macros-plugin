@@ -113,6 +113,7 @@ struct SharedObjectMacroTests {
       """,
       expandedSource: """
         final class Cache: SharedObject {
+          @JavaScriptActor
           func get(_ key: String) -> String? { nil }
 
           public static func _exposedClassDefinition() -> ClassDefinition {
@@ -165,6 +166,7 @@ struct SharedObjectMacroTests {
       """,
       expandedSource: """
         final class Cache: SharedObject {
+          @JavaScriptActor
           var size: Int { 42 }
 
           public static func _exposedClassDefinition() -> ClassDefinition {
@@ -191,6 +193,7 @@ struct SharedObjectMacroTests {
       """,
       expandedSource: """
         final class Cache: SharedObject {
+          @JavaScriptActor
           init(name: String) {}
 
           public static func _exposedClassDefinition() -> ClassDefinition {
@@ -223,8 +226,11 @@ struct SharedObjectMacroTests {
       """,
       expandedSource: """
         final class Cache: SharedObject {
+          @JavaScriptActor
           init(name: String) {}
+          @JavaScriptActor
           func get(_ key: String) -> String? { nil }
+          @JavaScriptActor
           var size: Int { 42 }
 
           public static func _exposedClassDefinition() -> ClassDefinition {
@@ -283,6 +289,7 @@ struct ExpoModuleClassesTests {
       """,
       expandedSource: """
         final class MyModule: Module {
+          @JavaScriptActor
           func ping() -> String { "pong" }
 
           public func _exposedDefinition() -> [AnyDefinition] {
