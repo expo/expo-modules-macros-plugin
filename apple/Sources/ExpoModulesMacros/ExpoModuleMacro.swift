@@ -29,6 +29,11 @@ public struct ExpoModuleMacro: MemberMacro {
       throw MacroExpansionErrorMessage("@ExpoModule can only be applied to a class")
     }
 
+    guard inheritsFromModule(classDecl) else {
+      throw MacroExpansionErrorMessage(
+        "@ExpoModule class must inherit from Module. Add `: Module` to the class declaration.")
+    }
+
     let moduleName = jsNameArgument(of: node) ?? classDecl.name.text
     var entries: [String] = ["Name(\"\(moduleName)\")"]
 
@@ -77,6 +82,12 @@ extension ExpoModuleMacro: MemberAttributeMacro {
     }
     return ["@JavaScriptActor"]
   }
+}
+
+// MARK: - Inheritance check
+
+private func inheritsFromModule(_ classDecl: ClassDeclSyntax) -> Bool {
+  return inheritsFromAny(classDecl, names: ["Module", "BaseModule", "AnyModule"])
 }
 
 // MARK: - Member builders
