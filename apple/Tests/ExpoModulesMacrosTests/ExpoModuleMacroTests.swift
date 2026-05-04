@@ -13,6 +13,7 @@ private let exposeMacroSpecs: [String: MacroSpec] = [
 private func assertExpansion(
   _ original: String,
   expandedSource expected: String,
+  diagnostics: [DiagnosticSpec] = [],
   sourceLocation: Testing.SourceLocation = #_sourceLocation,
   fileID: StaticString = #fileID,
   filePath: StaticString = #filePath,
@@ -22,6 +23,7 @@ private func assertExpansion(
   assertMacroExpansion(
     original,
     expandedSource: expected,
+    diagnostics: diagnostics,
     macroSpecs: exposeMacroSpecs,
     indentationWidth: .spaces(2),
     failureHandler: { spec in
@@ -267,6 +269,70 @@ struct ExpoModuleMacroTests {
             return [
               Name("MyModule"),
               Function("uiOnly", uiOnly)
+            ]
+          }
+        }
+        """
+    )
+  }
+
+  @Test
+  func `Class without : Module inheritance produces a diagnostic`() {
+    assertExpansion(
+      """
+      @ExpoModule
+      final class MyModule {
+      }
+      """,
+      expandedSource: """
+        final class MyModule {
+        }
+        """,
+      diagnostics: [
+        DiagnosticSpec(
+          message: "@ExpoModule class must inherit from Module. Add `: Module` to the class declaration.",
+          line: 1,
+          column: 1
+        )
+      ]
+    )
+  }
+
+  @Test
+  func `: BaseModule is accepted in place of : Module`() {
+    assertExpansion(
+      """
+      @ExpoModule
+      final class MyModule: BaseModule {
+      }
+      """,
+      expandedSource: """
+        final class MyModule: BaseModule {
+
+          public func _exposedDefinition() -> [AnyDefinition] {
+            return [
+              Name("MyModule")
+            ]
+          }
+        }
+        """
+    )
+  }
+
+  @Test
+  func `: AnyModule is accepted in place of : Module`() {
+    assertExpansion(
+      """
+      @ExpoModule
+      final class MyModule: AnyModule {
+      }
+      """,
+      expandedSource: """
+        final class MyModule: AnyModule {
+
+          public func _exposedDefinition() -> [AnyDefinition] {
+            return [
+              Name("MyModule")
             ]
           }
         }
