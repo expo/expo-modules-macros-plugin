@@ -29,11 +29,6 @@ public struct ExpoModuleMacro: MemberMacro {
       throw MacroExpansionErrorMessage("@ExpoModule can only be applied to a class")
     }
 
-    guard inheritsFromModule(classDecl) else {
-      throw MacroExpansionErrorMessage(
-        "@ExpoModule class must inherit from Module. Add `: Module` to the class declaration.")
-    }
-
     let moduleName = jsNameArgument(of: node) ?? classDecl.name.text
     var entries: [String] = ["Name(\"\(moduleName)\")"]
 
@@ -59,13 +54,31 @@ public struct ExpoModuleMacro: MemberMacro {
     let lines = entries.map { "    \($0)" }.joined(separator: ",\n")
     let body = "  return [\n\(lines)\n  ]"
 
+    var emitted: [DeclSyntax] = []
+
+    if !inheritsFromAny(classDecl, names: ["Module", "BaseModule"]) {
+      if !hasStoredProperty(classDecl, named: "appContext") {
+        emitted.append("public weak var appContext: AppContext?")
+      }
+      if !hasAppContextInitializer(classDecl) {
+        emitted.append(
+          """
+          public required init(appContext: AppContext) {
+            self.appContext = appContext
+          }
+          """
+        )
+      }
+    }
+
     let method: DeclSyntax = """
       public func _exposedDefinition() -> [AnyDefinition] {
       \(raw: body)
       }
       """
+    emitted.append(method)
 
-    return [method]
+    return emitted
   }
 }
 
@@ -76,18 +89,90 @@ extension ExpoModuleMacro: MemberAttributeMacro {
     providingAttributesFor member: some DeclSyntaxProtocol,
     in context: some MacroExpansionContext
   ) throws -> [AttributeSyntax] {
-    guard memberHasJSAttribute(member),
-      shouldStampJavaScriptActor(on: member, enclosedBy: declaration) else {
-      return []
+    var attributes: [AttributeSyntax] = []
+
+    if memberHasJSAttribute(member),
+      shouldStampJavaScriptActor(on: member, enclosedBy: declaration) {
+      attributes.append("@JavaScriptActor")
     }
-    return ["@JavaScriptActor"]
+
+    if isModuleDefinitionFunction(member),
+      !memberAttributes(of: member).contains(where: { hasAttributeName($0, "ModuleDefinitionBuilder") }) {
+      attributes.append("@ModuleDefinitionBuilder")
+    }
+
+    return attributes
   }
 }
 
-// MARK: - Inheritance check
+private func isModuleDefinitionFunction(_ member: some DeclSyntaxProtocol) -> Bool {
+  guard let funcDecl = member.as(FunctionDeclSyntax.self),
+    funcDecl.name.text == "definition",
+    funcDecl.signature.parameterClause.parameters.isEmpty,
+    let returnType = funcDecl.signature.returnClause?.type else {
+    return false
+  }
+  return baseIdentifier(of: returnType) == "ModuleDefinition"
+}
 
-private func inheritsFromModule(_ classDecl: ClassDeclSyntax) -> Bool {
-  return inheritsFromAny(classDecl, names: ["Module", "BaseModule", "AnyModule"])
+private func hasAttributeName(_ element: AttributeListSyntax.Element, _ name: String) -> Bool {
+  guard let attribute = element.as(AttributeSyntax.self) else {
+    return false
+  }
+  return attribute.attributeName.trimmedDescription == name
+}
+
+extension ExpoModuleMacro: ExtensionMacro {
+  public static func expansion(
+    of node: AttributeSyntax,
+    attachedTo declaration: some DeclGroupSyntax,
+    providingExtensionsOf type: some TypeSyntaxProtocol,
+    conformingTo protocols: [TypeSyntax],
+    in context: some MacroExpansionContext
+  ) throws -> [ExtensionDeclSyntax] {
+    guard !protocols.isEmpty else {
+      return []
+    }
+    if let classDecl = declaration.as(ClassDeclSyntax.self),
+      inheritsFromAny(classDecl, names: ["Module", "BaseModule", "AnyModule"]) {
+      return []
+    }
+    let conformance: DeclSyntax = "extension \(type.trimmed): AnyModule {}"
+    return [conformance.cast(ExtensionDeclSyntax.self)]
+  }
+}
+
+// MARK: - Synthesized-member detection
+
+private func hasStoredProperty(_ classDecl: ClassDeclSyntax, named name: String) -> Bool {
+  for member in classDecl.memberBlock.members {
+    guard let varDecl = member.decl.as(VariableDeclSyntax.self) else {
+      continue
+    }
+    for binding in varDecl.bindings {
+      if let identifier = binding.pattern.as(IdentifierPatternSyntax.self),
+        identifier.identifier.text == name {
+        return true
+      }
+    }
+  }
+  return false
+}
+
+private func hasAppContextInitializer(_ classDecl: ClassDeclSyntax) -> Bool {
+  for member in classDecl.memberBlock.members {
+    guard let initDecl = member.decl.as(InitializerDeclSyntax.self) else {
+      continue
+    }
+    let params = initDecl.signature.parameterClause.parameters
+    guard params.count == 1, let param = params.first else {
+      continue
+    }
+    if param.firstName.text == "appContext" {
+      return true
+    }
+  }
+  return false
 }
 
 // MARK: - Member builders

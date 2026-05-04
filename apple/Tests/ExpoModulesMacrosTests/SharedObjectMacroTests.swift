@@ -7,7 +7,7 @@ import Testing
 
 private let sharedObjectMacroSpecs: [String: MacroSpec] = [
   "JS": MacroSpec(type: JSMacro.self),
-  "ExpoModule": MacroSpec(type: ExpoModuleMacro.self),
+  "ExpoModule": MacroSpec(type: ExpoModuleMacro.self, conformances: ["AnyModule"]),
   "SharedObject": MacroSpec(type: SharedObjectMacro.self),
 ]
 
