@@ -7,12 +7,13 @@ import Testing
 
 private let macroSpecs: [String: MacroSpec] = [
   "JS": MacroSpec(type: JSMacro.self),
-  "ExpoModule": MacroSpec(type: ExpoModuleMacro.self),
+  "ExpoModule": MacroSpec(type: ExpoModuleMacro.self, conformances: ["AnyModule"]),
 ]
 
 private func assertExpansion(
   _ original: String,
   expandedSource expected: String,
+  diagnostics: [DiagnosticSpec] = [],
   sourceLocation: Testing.SourceLocation = #_sourceLocation,
   fileID: StaticString = #fileID,
   filePath: StaticString = #filePath,
@@ -22,6 +23,7 @@ private func assertExpansion(
   assertMacroExpansion(
     original,
     expandedSource: expected,
+    diagnostics: diagnostics,
     macroSpecs: macroSpecs,
     indentationWidth: .spaces(2),
     failureHandler: { spec in
@@ -267,6 +269,96 @@ struct ExpoModuleMacroTests {
             return [
               Name("MyModule"),
               Function("uiOnly", uiOnly)
+            ]
+          }
+        }
+        """
+    )
+  }
+
+  @Test
+  func `Class without inheritance gets an AnyModule conformance via extension`() {
+    assertExpansion(
+      """
+      @ExpoModule
+      final class MyModule {
+      }
+      """,
+      expandedSource: """
+        final class MyModule {
+
+          public func _synthesizedDefinition() -> [AnyDefinition] {
+            return [
+              Name("MyModule")
+            ]
+          }
+        }
+
+        extension MyModule: AnyModule {
+        }
+        """
+    )
+  }
+
+  @Test
+  func `Class with another superclass gets an AnyModule conformance via extension`() {
+    assertExpansion(
+      """
+      @ExpoModule
+      final class MyModule: SomeOtherBase {
+      }
+      """,
+      expandedSource: """
+        final class MyModule: SomeOtherBase {
+
+          public func _synthesizedDefinition() -> [AnyDefinition] {
+            return [
+              Name("MyModule")
+            ]
+          }
+        }
+
+        extension MyModule: AnyModule {
+        }
+        """
+    )
+  }
+
+  @Test
+  func `: BaseModule does not get a redundant AnyModule conformance`() {
+    assertExpansion(
+      """
+      @ExpoModule
+      final class MyModule: BaseModule {
+      }
+      """,
+      expandedSource: """
+        final class MyModule: BaseModule {
+
+          public func _synthesizedDefinition() -> [AnyDefinition] {
+            return [
+              Name("MyModule")
+            ]
+          }
+        }
+        """
+    )
+  }
+
+  @Test
+  func `: AnyModule does not get a redundant AnyModule conformance`() {
+    assertExpansion(
+      """
+      @ExpoModule
+      final class MyModule: AnyModule {
+      }
+      """,
+      expandedSource: """
+        final class MyModule: AnyModule {
+
+          public func _synthesizedDefinition() -> [AnyDefinition] {
+            return [
+              Name("MyModule")
             ]
           }
         }

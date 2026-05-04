@@ -40,6 +40,37 @@ internal func classListArgument(of attribute: AttributeSyntax, label: String) ->
 }
 
 /**
+ Returns true if the class's inheritance clause names any of the given identifiers.
+ Matches by base identifier only, so `Module`, `ExpoModulesCore.Module`, and
+ `Module<Foo>` all match an entry of "Module".
+ */
+internal func inheritsFromAny(_ classDecl: ClassDeclSyntax, names: Set<String>) -> Bool {
+  guard let inherited = classDecl.inheritanceClause?.inheritedTypes else {
+    return false
+  }
+  for entry in inherited {
+    if let name = baseIdentifier(of: entry.type), names.contains(name) {
+      return true
+    }
+  }
+  return false
+}
+
+/**
+ Returns the rightmost identifier of a type, e.g. `Foo` for `Foo`, `Foo` for
+ `Module.Foo`, and nil for composed or generic shapes the macro doesn't need to handle.
+ */
+internal func baseIdentifier(of type: TypeSyntax) -> String? {
+  if let identifier = type.as(IdentifierTypeSyntax.self) {
+    return identifier.name.text
+  }
+  if let member = type.as(MemberTypeSyntax.self) {
+    return member.name.text
+  }
+  return nil
+}
+
+/**
  True if the declaration carries a `@JS` attribute. Works for functions, properties, and inits;
  returns false for any other decl kind.
  */

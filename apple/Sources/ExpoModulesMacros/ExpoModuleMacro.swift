@@ -79,6 +79,26 @@ extension ExpoModuleMacro: MemberAttributeMacro {
   }
 }
 
+extension ExpoModuleMacro: ExtensionMacro {
+  public static func expansion(
+    of node: AttributeSyntax,
+    attachedTo declaration: some DeclGroupSyntax,
+    providingExtensionsOf type: some TypeSyntaxProtocol,
+    conformingTo protocols: [TypeSyntax],
+    in context: some MacroExpansionContext
+  ) throws -> [ExtensionDeclSyntax] {
+    guard !protocols.isEmpty else {
+      return []
+    }
+    if let classDecl = declaration.as(ClassDeclSyntax.self),
+      inheritsFromAny(classDecl, names: ["Module", "BaseModule", "AnyModule"]) {
+      return []
+    }
+    let conformance: DeclSyntax = "extension \(type.trimmed): AnyModule {}"
+    return [conformance.cast(ExtensionDeclSyntax.self)]
+  }
+}
+
 // MARK: - Member builders
 
 private func buildFunctionEntry(
