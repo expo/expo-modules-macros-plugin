@@ -29,11 +29,6 @@ public struct ExpoModuleMacro: MemberMacro {
       throw MacroExpansionErrorMessage("@ExpoModule can only be applied to a class")
     }
 
-    guard inheritsFromModule(classDecl) else {
-      throw MacroExpansionErrorMessage(
-        "@ExpoModule class must inherit from Module. Add `: Module` to the class declaration.")
-    }
-
     let moduleName = jsNameArgument(of: node) ?? classDecl.name.text
     var entries: [String] = ["Name(\"\(moduleName)\")"]
 
@@ -84,10 +79,24 @@ extension ExpoModuleMacro: MemberAttributeMacro {
   }
 }
 
-// MARK: - Inheritance check
-
-private func inheritsFromModule(_ classDecl: ClassDeclSyntax) -> Bool {
-  return inheritsFromAny(classDecl, names: ["Module", "BaseModule", "AnyModule"])
+extension ExpoModuleMacro: ExtensionMacro {
+  public static func expansion(
+    of node: AttributeSyntax,
+    attachedTo declaration: some DeclGroupSyntax,
+    providingExtensionsOf type: some TypeSyntaxProtocol,
+    conformingTo protocols: [TypeSyntax],
+    in context: some MacroExpansionContext
+  ) throws -> [ExtensionDeclSyntax] {
+    guard !protocols.isEmpty else {
+      return []
+    }
+    if let classDecl = declaration.as(ClassDeclSyntax.self),
+      inheritsFromAny(classDecl, names: ["Module", "BaseModule", "AnyModule"]) {
+      return []
+    }
+    let conformance: DeclSyntax = "extension \(type.trimmed): AnyModule {}"
+    return [conformance.cast(ExtensionDeclSyntax.self)]
+  }
 }
 
 // MARK: - Member builders

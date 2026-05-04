@@ -7,7 +7,7 @@ import Testing
 
 private let exposeMacroSpecs: [String: MacroSpec] = [
   "JS": MacroSpec(type: JSMacro.self),
-  "ExpoModule": MacroSpec(type: ExpoModuleMacro.self),
+  "ExpoModule": MacroSpec(type: ExpoModuleMacro.self, conformances: ["AnyModule"]),
 ]
 
 private func assertExpansion(
@@ -277,7 +277,7 @@ struct ExpoModuleMacroTests {
   }
 
   @Test
-  func `Class without : Module inheritance produces a diagnostic`() {
+  func `Class without inheritance gets an AnyModule conformance via extension`() {
     assertExpansion(
       """
       @ExpoModule
@@ -286,20 +286,46 @@ struct ExpoModuleMacroTests {
       """,
       expandedSource: """
         final class MyModule {
+
+          public func _exposedDefinition() -> [AnyDefinition] {
+            return [
+              Name("MyModule")
+            ]
+          }
         }
-        """,
-      diagnostics: [
-        DiagnosticSpec(
-          message: "@ExpoModule class must inherit from Module. Add `: Module` to the class declaration.",
-          line: 1,
-          column: 1
-        )
-      ]
+
+        extension MyModule: AnyModule {
+        }
+        """
     )
   }
 
   @Test
-  func `: BaseModule is accepted in place of : Module`() {
+  func `Class with another superclass gets an AnyModule conformance via extension`() {
+    assertExpansion(
+      """
+      @ExpoModule
+      final class MyModule: SomeOtherBase {
+      }
+      """,
+      expandedSource: """
+        final class MyModule: SomeOtherBase {
+
+          public func _exposedDefinition() -> [AnyDefinition] {
+            return [
+              Name("MyModule")
+            ]
+          }
+        }
+
+        extension MyModule: AnyModule {
+        }
+        """
+    )
+  }
+
+  @Test
+  func `: BaseModule does not get a redundant AnyModule conformance`() {
     assertExpansion(
       """
       @ExpoModule
@@ -320,7 +346,7 @@ struct ExpoModuleMacroTests {
   }
 
   @Test
-  func `: AnyModule is accepted in place of : Module`() {
+  func `: AnyModule does not get a redundant AnyModule conformance`() {
     assertExpansion(
       """
       @ExpoModule
