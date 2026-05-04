@@ -134,7 +134,7 @@ private func memberModifiers(of decl: DeclSyntaxProtocol) -> DeclModifierListSyn
   return DeclModifierListSyntax()
 }
 
-private func memberAttributes(of decl: DeclSyntaxProtocol) -> AttributeListSyntax {
+internal func memberAttributes(of decl: DeclSyntaxProtocol) -> AttributeListSyntax {
   if let funcDecl = decl.as(FunctionDeclSyntax.self) {
     return funcDecl.attributes
   }
