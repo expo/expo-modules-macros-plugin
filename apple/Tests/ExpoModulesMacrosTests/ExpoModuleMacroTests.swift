@@ -277,7 +277,7 @@ struct ExpoModuleMacroTests {
   }
 
   @Test
-  func `Class without inheritance gets an AnyModule conformance via extension`() {
+  func `Class without inheritance gets appContext storage, init, and an AnyModule conformance`() {
     assertExpansion(
       """
       @ExpoModule
@@ -286,6 +286,12 @@ struct ExpoModuleMacroTests {
       """,
       expandedSource: """
         final class MyModule {
+
+          public weak var appContext: AppContext?
+
+          public required init(appContext: AppContext) {
+            self.appContext = appContext
+          }
 
           public func _exposedDefinition() -> [AnyDefinition] {
             return [
@@ -301,7 +307,7 @@ struct ExpoModuleMacroTests {
   }
 
   @Test
-  func `Class with another superclass gets an AnyModule conformance via extension`() {
+  func `Class with another superclass gets appContext storage, init, and an AnyModule conformance`() {
     assertExpansion(
       """
       @ExpoModule
@@ -310,6 +316,12 @@ struct ExpoModuleMacroTests {
       """,
       expandedSource: """
         final class MyModule: SomeOtherBase {
+
+          public weak var appContext: AppContext?
+
+          public required init(appContext: AppContext) {
+            self.appContext = appContext
+          }
 
           public func _exposedDefinition() -> [AnyDefinition] {
             return [
@@ -346,7 +358,7 @@ struct ExpoModuleMacroTests {
   }
 
   @Test
-  func `: AnyModule does not get a redundant AnyModule conformance`() {
+  func `: AnyModule gets storage and init but no redundant conformance`() {
     assertExpansion(
       """
       @ExpoModule
@@ -355,6 +367,127 @@ struct ExpoModuleMacroTests {
       """,
       expandedSource: """
         final class MyModule: AnyModule {
+
+          public weak var appContext: AppContext?
+
+          public required init(appContext: AppContext) {
+            self.appContext = appContext
+          }
+
+          public func _exposedDefinition() -> [AnyDefinition] {
+            return [
+              Name("MyModule")
+            ]
+          }
+        }
+        """
+    )
+  }
+
+  @Test
+  func `User-provided appContext property is not overridden`() {
+    assertExpansion(
+      """
+      @ExpoModule
+      final class MyModule {
+        public weak var appContext: AppContext?
+      }
+      """,
+      expandedSource: """
+        final class MyModule {
+          public weak var appContext: AppContext?
+
+          public required init(appContext: AppContext) {
+            self.appContext = appContext
+          }
+
+          public func _exposedDefinition() -> [AnyDefinition] {
+            return [
+              Name("MyModule")
+            ]
+          }
+        }
+
+        extension MyModule: AnyModule {
+        }
+        """
+    )
+  }
+
+  @Test
+  func `User-provided init(appContext:) is not overridden`() {
+    assertExpansion(
+      """
+      @ExpoModule
+      final class MyModule {
+        public required init(appContext: AppContext) {}
+      }
+      """,
+      expandedSource: """
+        final class MyModule {
+          public required init(appContext: AppContext) {}
+
+          public weak var appContext: AppContext?
+
+          public func _exposedDefinition() -> [AnyDefinition] {
+            return [
+              Name("MyModule")
+            ]
+          }
+        }
+
+        extension MyModule: AnyModule {
+        }
+        """
+    )
+  }
+
+  @Test
+  func `definition() is stamped with @ModuleDefinitionBuilder`() {
+    assertExpansion(
+      """
+      @ExpoModule
+      final class MyModule: Module {
+        public func definition() -> ModuleDefinition {
+          Name("MyModule")
+        }
+      }
+      """,
+      expandedSource: """
+        final class MyModule: Module {
+          @ModuleDefinitionBuilder
+          public func definition() -> ModuleDefinition {
+            Name("MyModule")
+          }
+
+          public func _exposedDefinition() -> [AnyDefinition] {
+            return [
+              Name("MyModule")
+            ]
+          }
+        }
+        """
+    )
+  }
+
+  @Test
+  func `definition() that already has @ModuleDefinitionBuilder is not stamped twice`() {
+    assertExpansion(
+      """
+      @ExpoModule
+      final class MyModule: Module {
+        @ModuleDefinitionBuilder
+        public func definition() -> ModuleDefinition {
+          Name("MyModule")
+        }
+      }
+      """,
+      expandedSource: """
+        final class MyModule: Module {
+          @ModuleDefinitionBuilder
+          public func definition() -> ModuleDefinition {
+            Name("MyModule")
+          }
 
           public func _exposedDefinition() -> [AnyDefinition] {
             return [
