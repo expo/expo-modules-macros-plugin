@@ -8,5 +8,6 @@ struct ExpoModulesMacrosPlugin: CompilerPlugin {
     JSMacro.self,
     ExpoModuleMacro.self,
     SharedObjectMacro.self,
+    RecordMacro.self,
   ]
 }
