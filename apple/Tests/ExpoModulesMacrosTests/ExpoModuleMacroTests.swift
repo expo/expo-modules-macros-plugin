@@ -5,7 +5,7 @@ import SwiftSyntaxMacros
 import SwiftSyntaxMacrosGenericTestSupport
 import Testing
 
-private let exposeMacroSpecs: [String: MacroSpec] = [
+private let macroSpecs: [String: MacroSpec] = [
   "JS": MacroSpec(type: JSMacro.self),
   "ExpoModule": MacroSpec(type: ExpoModuleMacro.self),
 ]
@@ -22,7 +22,7 @@ private func assertExpansion(
   assertMacroExpansion(
     original,
     expandedSource: expected,
-    macroSpecs: exposeMacroSpecs,
+    macroSpecs: macroSpecs,
     indentationWidth: .spaces(2),
     failureHandler: { spec in
       Issue.record(Comment(rawValue: spec.message), sourceLocation: sourceLocation)
@@ -47,7 +47,7 @@ struct ExpoModuleMacroTests {
       expandedSource: """
         final class MyModule: Module {
 
-          public func _exposedDefinition() -> [AnyDefinition] {
+          public func _synthesizedDefinition() -> [AnyDefinition] {
             return [
               Name("MyModule")
             ]
@@ -68,7 +68,7 @@ struct ExpoModuleMacroTests {
       expandedSource: """
         final class MyModule: Module {
 
-          public func _exposedDefinition() -> [AnyDefinition] {
+          public func _synthesizedDefinition() -> [AnyDefinition] {
             return [
               Name("CustomName")
             ]
@@ -93,7 +93,7 @@ struct ExpoModuleMacroTests {
           @JavaScriptActor
           func greet(name: String) -> String { "Hi" }
 
-          public func _exposedDefinition() -> [AnyDefinition] {
+          public func _synthesizedDefinition() -> [AnyDefinition] {
             return [
               Name("MyModule"),
               Function("greet", greet)
@@ -118,7 +118,7 @@ struct ExpoModuleMacroTests {
         final class MyModule: Module {
           func performWork() async throws {}
 
-          public func _exposedDefinition() -> [AnyDefinition] {
+          public func _synthesizedDefinition() -> [AnyDefinition] {
             return [
               Name("MyModule"),
               AsyncFunction("doWork", performWork)
@@ -144,7 +144,7 @@ struct ExpoModuleMacroTests {
           @JavaScriptActor
           var status: String { "ok" }
 
-          public func _exposedDefinition() -> [AnyDefinition] {
+          public func _synthesizedDefinition() -> [AnyDefinition] {
             return [
               Name("MyModule"),
               Property("status") {
@@ -181,7 +181,7 @@ struct ExpoModuleMacroTests {
 
           func notExposed() {}
 
-          public func _exposedDefinition() -> [AnyDefinition] {
+          public func _synthesizedDefinition() -> [AnyDefinition] {
             return [
               Name("MyModule"),
               Function("greet", greet),
@@ -209,7 +209,7 @@ struct ExpoModuleMacroTests {
         final class MyModule: Module {
           nonisolated func compute() -> Int { 42 }
 
-          public func _exposedDefinition() -> [AnyDefinition] {
+          public func _synthesizedDefinition() -> [AnyDefinition] {
             return [
               Name("MyModule"),
               Function("compute", compute)
@@ -236,7 +236,7 @@ struct ExpoModuleMacroTests {
           @MainActor
           func uiOnly() -> Int { 0 }
 
-          public func _exposedDefinition() -> [AnyDefinition] {
+          public func _synthesizedDefinition() -> [AnyDefinition] {
             return [
               Name("MyModule"),
               Function("uiOnly", uiOnly)
@@ -263,7 +263,7 @@ struct ExpoModuleMacroTests {
         final class MyModule: Module {
           func uiOnly() -> Int { 0 }
 
-          public func _exposedDefinition() -> [AnyDefinition] {
+          public func _synthesizedDefinition() -> [AnyDefinition] {
             return [
               Name("MyModule"),
               Function("uiOnly", uiOnly)

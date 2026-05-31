@@ -72,7 +72,7 @@ struct SharedObjectMacroTests {
       expandedSource: """
         final class Cache: SharedObject {
 
-          public static func _exposedClassDefinition() -> ClassDefinition {
+          public static func _synthesizedClassDefinition() -> ClassDefinition {
             return Class("Cache", Cache.self) {
             }
           }
@@ -92,7 +92,7 @@ struct SharedObjectMacroTests {
       expandedSource: """
         final class Cache: SharedObject {
 
-          public static func _exposedClassDefinition() -> ClassDefinition {
+          public static func _synthesizedClassDefinition() -> ClassDefinition {
             return Class("MyCache", Cache.self) {
             }
           }
@@ -116,7 +116,7 @@ struct SharedObjectMacroTests {
           @JavaScriptActor
           func get(_ key: String) -> String? { nil }
 
-          public static func _exposedClassDefinition() -> ClassDefinition {
+          public static func _synthesizedClassDefinition() -> ClassDefinition {
             return Class("Cache", Cache.self) {
               Function("get") { (this: Cache, _ arg0: String) in
                 this.get(arg0)
@@ -142,7 +142,7 @@ struct SharedObjectMacroTests {
         final class Cache: SharedObject {
           func load() async throws {}
 
-          public static func _exposedClassDefinition() -> ClassDefinition {
+          public static func _synthesizedClassDefinition() -> ClassDefinition {
             return Class("Cache", Cache.self) {
               AsyncFunction("loadAsync") { (this: Cache) in
                 try await this.load()
@@ -169,7 +169,7 @@ struct SharedObjectMacroTests {
           @JavaScriptActor
           var size: Int { 42 }
 
-          public static func _exposedClassDefinition() -> ClassDefinition {
+          public static func _synthesizedClassDefinition() -> ClassDefinition {
             return Class("Cache", Cache.self) {
               Property("size") { (this: Cache) in
                 this.size
@@ -196,7 +196,7 @@ struct SharedObjectMacroTests {
           @JavaScriptActor
           init(name: String) {}
 
-          public static func _exposedClassDefinition() -> ClassDefinition {
+          public static func _synthesizedClassDefinition() -> ClassDefinition {
             return Class("Cache", Cache.self) {
               Constructor { (_ arg0: String) in
                 Cache(name: arg0)
@@ -233,7 +233,7 @@ struct SharedObjectMacroTests {
           @JavaScriptActor
           var size: Int { 42 }
 
-          public static func _exposedClassDefinition() -> ClassDefinition {
+          public static func _synthesizedClassDefinition() -> ClassDefinition {
             return Class("Cache", Cache.self) {
               Constructor { (_ arg0: String) in
                 Cache(name: arg0)
@@ -255,7 +255,7 @@ struct SharedObjectMacroTests {
 @Suite("@ExpoModule classes: argument")
 struct ExpoModuleClassesTests {
   @Test
-  func `classes: list emits _exposedClassDefinition() entries`() {
+  func `classes: list emits _synthesizedClassDefinition() entries`() {
     assertExpansion(
       """
       @ExpoModule(classes: [Cache.self, UserSession.self])
@@ -265,11 +265,11 @@ struct ExpoModuleClassesTests {
       expandedSource: """
         final class MyModule: Module {
 
-          public func _exposedDefinition() -> [AnyDefinition] {
+          public func _synthesizedDefinition() -> [AnyDefinition] {
             return [
               Name("MyModule"),
-              Cache._exposedClassDefinition(),
-              UserSession._exposedClassDefinition()
+              Cache._synthesizedClassDefinition(),
+              UserSession._synthesizedClassDefinition()
             ]
           }
         }
@@ -292,10 +292,10 @@ struct ExpoModuleClassesTests {
           @JavaScriptActor
           func ping() -> String { "pong" }
 
-          public func _exposedDefinition() -> [AnyDefinition] {
+          public func _synthesizedDefinition() -> [AnyDefinition] {
             return [
               Name("CustomName"),
-              Cache._exposedClassDefinition(),
+              Cache._synthesizedClassDefinition(),
               Function("ping", ping)
             ]
           }
