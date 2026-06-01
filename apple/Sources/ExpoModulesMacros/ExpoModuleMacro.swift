@@ -64,6 +64,21 @@ public struct ExpoModuleMacro: MemberMacro {
   }
 }
 
+extension ExpoModuleMacro: MemberAttributeMacro {
+  public static func expansion(
+    of node: AttributeSyntax,
+    attachedTo declaration: some DeclGroupSyntax,
+    providingAttributesFor member: some DeclSyntaxProtocol,
+    in context: some MacroExpansionContext
+  ) throws -> [AttributeSyntax] {
+    guard memberHasJSAttribute(member),
+      shouldStampJavaScriptActor(on: member, enclosedBy: declaration) else {
+      return []
+    }
+    return ["@JavaScriptActor"]
+  }
+}
+
 // MARK: - Member builders
 
 private func buildFunctionEntry(
