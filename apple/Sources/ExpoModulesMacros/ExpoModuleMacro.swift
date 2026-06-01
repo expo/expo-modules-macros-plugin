@@ -4,7 +4,7 @@ import SwiftSyntaxMacros
 
 /**
  Member macro applied to a `Module` subclass. Scans the class body for declarations
- marked with `@JS` and synthesizes a framework-internal `_exposedDefinition()`
+ marked with `@JS` and synthesizes a framework-internal `_synthesizedDefinition()`
  method returning `[AnyDefinition]`. `expo-modules-core` calls it automatically
  and merges the result into the module's definition.
 
@@ -33,7 +33,7 @@ public struct ExpoModuleMacro: MemberMacro {
     var entries: [String] = ["Name(\"\(moduleName)\")"]
 
     for typeName in classListArgument(of: node, label: "classes") {
-      entries.append("\(typeName)._exposedClassDefinition()")
+      entries.append("\(typeName)._synthesizedClassDefinition()")
     }
 
     for member in classDecl.memberBlock.members {
@@ -55,7 +55,7 @@ public struct ExpoModuleMacro: MemberMacro {
     let body = "  return [\n\(lines)\n  ]"
 
     let method: DeclSyntax = """
-      public func _exposedDefinition() -> [AnyDefinition] {
+      public func _synthesizedDefinition() -> [AnyDefinition] {
       \(raw: body)
       }
       """

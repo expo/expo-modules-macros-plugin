@@ -4,7 +4,7 @@ import SwiftSyntaxMacros
 
 /**
  Member macro applied to a `SharedObject` subclass. Scans the class body for
- declarations marked with `@JS` and synthesizes `_exposedClassDefinition()`,
+ declarations marked with `@JS` and synthesizes `_synthesizedClassDefinition()`,
  returning a `ClassDefinition` ready to drop into a module's `Class { ... }` slot.
 
    @SharedObject
@@ -79,7 +79,7 @@ public struct SharedObjectMacro: MemberMacro {
       : "  return Class(\"\(jsName)\", \(typeName).self) {\n\(lines)\n  }"
 
     let method: DeclSyntax = """
-      public static func _exposedClassDefinition() -> ClassDefinition {
+      public static func _synthesizedClassDefinition() -> ClassDefinition {
       \(raw: body)
       }
       """
