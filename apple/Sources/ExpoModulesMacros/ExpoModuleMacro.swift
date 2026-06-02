@@ -3,13 +3,23 @@ import SwiftSyntaxBuilder
 import SwiftSyntaxMacros
 
 /**
- Member macro applied to a `Module` subclass. Scans the class body for declarations
- marked with `@JS` and synthesizes a framework-internal `_synthesizedDefinition()`
- method returning `[AnyDefinition]`. `expo-modules-core` calls it automatically
- and merges the result into the module's definition.
+ Macro applied to a module class. It plays three roles, each implemented in its own
+ extension below:
+
+ - `MemberMacro`: scans the class body for `@JS`-marked declarations and synthesizes a
+   framework-internal `_synthesizedDefinition()` returning `[AnyDefinition]`, which
+   `expo-modules-core` calls automatically and merges into the module's definition. When
+   the class doesn't already inherit `Module`/`BaseModule`, it also synthesizes the
+   `appContext` storage and `init(appContext:)` those base classes would have provided.
+ - `MemberAttributeMacro`: stamps `@JavaScriptActor` on `@JS` sync members and
+   `@ModuleDefinitionBuilder` on a `definition()` method.
+ - `ExtensionMacro`: adds the `AnyModule` conformance when the class doesn't inherit it.
+
+ Inheriting from `Module` is therefore optional — a class can carry any superclass (or
+ none) and still be a module, because everything inheritance used to provide is synthesized.
 
    @ExpoModule
-   public final class MyModule: Module {
+   public final class MyModule {
      public func definition() -> ModuleDefinition {
        Name("MyModule")
      }
@@ -56,6 +66,10 @@ public struct ExpoModuleMacro: MemberMacro {
 
     var emitted: [DeclSyntax] = []
 
+    // `Module`/`BaseModule` already provide `appContext` storage and the
+    // `init(appContext:)` requirement, so we only synthesize them for classes that
+    // inherit from neither. Each is skipped individually if the user wrote their own,
+    // to avoid emitting a duplicate declaration.
     if !inheritsFromAny(classDecl, names: ["Module", "BaseModule"]) {
       if !hasStoredProperty(classDecl, named: "appContext") {
         emitted.append("public weak var appContext: AppContext?")
@@ -71,6 +85,8 @@ public struct ExpoModuleMacro: MemberMacro {
       }
     }
 
+    // Always emitted: the definition is derived from the class name and `@JS` members,
+    // independent of any `definition()` the user wrote.
     let method: DeclSyntax = """
       public func _synthesizedDefinition() -> [AnyDefinition] {
       \(raw: body)
@@ -89,13 +105,23 @@ extension ExpoModuleMacro: MemberAttributeMacro {
     providingAttributesFor member: some DeclSyntaxProtocol,
     in context: some MacroExpansionContext
   ) throws -> [AttributeSyntax] {
+    // This macro is invoked once per member and may attach more than one attribute,
+    // so we collect into an array rather than returning early. The two checks below are
+    // independent — a given member matches at most one in practice, but they're written
+    // so neither precludes the other.
     var attributes: [AttributeSyntax] = []
 
+    // `@JS` sync members run on the JS thread; stamp `@JavaScriptActor` so isolation is
+    // checked at compile time. Skipped when the member already chose an isolation
+    // (`async`, `nonisolated`, or another global actor) — see `shouldStampJavaScriptActor`.
     if memberHasJSAttribute(member),
       shouldStampJavaScriptActor(on: member, enclosedBy: declaration) {
       attributes.append("@JavaScriptActor")
     }
 
+    // Apply the result builder to `definition()` so the user doesn't have to. Skipped if
+    // they already wrote `@ModuleDefinitionBuilder` themselves, which would otherwise be
+    // a duplicate attribute.
     if isModuleDefinitionFunction(member),
       !memberAttributes(of: member).contains(where: { hasAttributeName($0, "ModuleDefinitionBuilder") }) {
       attributes.append("@ModuleDefinitionBuilder")
@@ -130,9 +156,13 @@ extension ExpoModuleMacro: ExtensionMacro {
     conformingTo protocols: [TypeSyntax],
     in context: some MacroExpansionContext
   ) throws -> [ExtensionDeclSyntax] {
+    // `protocols` is empty when the compiler already sees the conformance (e.g. it's
+    // spelled in the declaration), in which case there's nothing for us to add.
     guard !protocols.isEmpty else {
       return []
     }
+    // These base types already supply `AnyModule`; emitting a second conformance here
+    // would be redundant and error.
     if let classDecl = declaration.as(ClassDeclSyntax.self),
       inheritsFromAny(classDecl, names: ["Module", "BaseModule", "AnyModule"]) {
       return []
