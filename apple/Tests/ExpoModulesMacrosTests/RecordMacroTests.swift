@@ -475,6 +475,35 @@ struct RecordMacroTests {
   }
 
   @Test
+  func `A leftover @Field attribute produces a diagnostic`() {
+    assertExpansion(
+      """
+      @Record
+      struct Options {
+        var name: String
+        @Field var defaultName = "foo"
+      }
+      """,
+      expandedSource: """
+        struct Options {
+          var name: String
+          @Field var defaultName = "foo"
+        }
+
+        extension Options: Record {
+        }
+        """,
+      diagnostics: [
+        DiagnosticSpec(
+          message: "@Field is no longer used — @Record treats every stored property as a record property. Remove the @Field attribute",
+          line: 1,
+          column: 1
+        )
+      ]
+    )
+  }
+
+  @Test
   func `Applying @Record to an enum produces a diagnostic`() {
     assertExpansion(
       """
