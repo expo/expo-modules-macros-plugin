@@ -106,25 +106,7 @@ extension SharedObjectMacro: MemberAttributeMacro {
 // MARK: - Inheritance check
 
 private func inheritsFromSharedObject(_ classDecl: ClassDeclSyntax) -> Bool {
-  guard let inherited = classDecl.inheritanceClause?.inheritedTypes else {
-    return false
-  }
-  for entry in inherited {
-    if baseIdentifier(of: entry.type) == "SharedObject" {
-      return true
-    }
-  }
-  return false
-}
-
-private func baseIdentifier(of type: TypeSyntax) -> String? {
-  if let identifier = type.as(IdentifierTypeSyntax.self) {
-    return identifier.name.text
-  }
-  if let member = type.as(MemberTypeSyntax.self) {
-    return member.name.text
-  }
-  return nil
+  return inheritsFromAny(classDecl, names: ["SharedObject"])
 }
 
 // MARK: - Class-scope entry builders
