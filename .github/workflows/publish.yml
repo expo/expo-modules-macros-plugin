@@ -23,7 +23,7 @@ concurrency:
 
 jobs:
   publish:
-    name: Bump, release & publish to npm
+    name: Build and publish to npm
     # Builds the native macOS tool binary, so it must run on macOS.
     # The package declares swift-tools-version 6.2, which requires Xcode 26+.
     runs-on: macos-26
