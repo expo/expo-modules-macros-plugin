@@ -97,7 +97,9 @@ jobs:
         run: |
           version="${{ steps.bump.outputs.version }}"
           git commit -am "Release $version"
-          git tag "$version"
+          # Use an annotated tag so `git push --follow-tags` actually pushes it
+          # (--follow-tags ignores lightweight tags).
+          git tag -a "$version" -m "Release $version"
           git push --follow-tags origin HEAD
 
       - name: Create GitHub release
