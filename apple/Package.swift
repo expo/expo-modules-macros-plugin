@@ -2,6 +2,7 @@
 // The swift-tools-version declares the minimum version of Swift required to build this package.
 
 import CompilerPluginSupport
+import Foundation
 import PackageDescription
 
 let package = Package(
@@ -18,8 +19,14 @@ let package = Package(
         .product(name: "SwiftSyntaxMacros", package: "swift-syntax"),
         .product(name: "SwiftCompilerPlugin", package: "swift-syntax"),
       ]
-    ),
+    )
+  ]
+)
 
+// The Tests directory is excluded from the published npm package,
+// so only declare the test target when building from the repository.
+if FileManager.default.fileExists(atPath: Context.packageDirectory + "/Tests") {
+  package.targets.append(
     .testTarget(
       name: "ExpoModulesMacrosTests",
       dependencies: [
@@ -27,6 +34,6 @@ let package = Package(
         .product(name: "SwiftSyntaxMacrosTestSupport", package: "swift-syntax"),
         .product(name: "SwiftSyntaxMacrosGenericTestSupport", package: "swift-syntax"),
       ]
-    ),
-  ]
-)
+    )
+  )
+}
