@@ -28,10 +28,6 @@ jobs:
         # Pin to an Xcode that ships Swift 6.2 (required by Package.swift).
         run: sudo xcode-select -switch /Applications/Xcode_26.4.1.app
 
-      - name: Install Rosetta
-        # Required to build the x86_64 slice of the plugin binary on arm64 runners.
-        run: sudo softwareupdate --install-rosetta --agree-to-license
-
       - name: Cache SwiftPM build
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:

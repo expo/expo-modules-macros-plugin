@@ -1,16 +1,19 @@
 #!/usr/bin/env node
 
-const { spawn } = require('node:child_process');
+const childProcess = require('node:child_process');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
+const { promisify } = require('node:util');
+
+const execFile = promisify(childProcess.execFile);
 
 /**
  * Runs a command and resolves when it exits successfully.
  */
 function spawnAsync(command, args, options = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { stdio: 'inherit', ...options });
+    const child = childProcess.spawn(command, args, { stdio: 'inherit', ...options });
     child.once('error', reject);
     child.once('close', (code, signal) => {
       if (code === 0) {
@@ -25,7 +28,7 @@ function spawnAsync(command, args, options = {}) {
 /**
  * Builds the macro plugin for the given architecture and returns the path to the built binary.
  * SwiftPM always builds macro tools for the host architecture, so the x86_64 slice
- * is built by running the whole toolchain under Rosetta with `arch -x86_64`.
+ * is built by running the whole toolchain under Rosetta with `arch -${arch}`.
  */
 async function buildForArch(arch) {
   const buildArgs = ['build', '-c', 'release'];
@@ -45,18 +48,54 @@ async function buildForArch(arch) {
 }
 
 /**
- * Checks whether the toolchain can run for the given architecture,
- * e.g. x86_64 on Apple Silicon requires Rosetta to be installed.
+ * Checks whether the Swift toolchain actually runs for the given architecture by
+ * verifying the host target triple it reports, e.g. `Target: x86_64-apple-macosx26.0`
+ * under Rosetta. Exit status alone is not enough: if `arch` ever fell back to the
+ * native architecture, the probe would pass but the build would produce a wrong slice.
+ */
+async function canRunSwiftForArch(arch) {
+  try {
+    const { stdout } = await execFile('arch', [`-${arch}`, 'swift', '--version']);
+    return stdout.includes(`${arch}-apple`);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Checks whether the toolchain can build for the given architecture.
+ * Building x86_64 on Apple Silicon requires Rosetta, so when it is missing,
+ * try to install it before giving up.
  */
 async function canBuildForArch(arch) {
   if (arch === os.machine()) {
     return true;
   }
-  try {
-    await spawnAsync('arch', [`-${arch}`, 'swift', '--version'], { stdio: 'ignore' });
+  if (await canRunSwiftForArch(arch)) {
     return true;
-  } catch {
-    return false;
+  }
+  if (arch === 'x86_64' && os.machine() === 'arm64') {
+    try {
+      console.log('Installing Rosetta to build the x86_64 slice...');
+      await spawnAsync('sudo', ['softwareupdate', '--install-rosetta', '--agree-to-license']);
+      return await canRunSwiftForArch(arch);
+    } catch {
+      // No sudo access or the install failed - fall through to the unsupported arch warning.
+    }
+  }
+  return false;
+}
+
+/**
+ * Asserts that the built binary contains a slice for each of the given architectures.
+ */
+async function verifyArchs(binaryPath, archs) {
+  const { stdout } = await execFile('lipo', ['-archs', binaryPath]);
+  const builtArchs = stdout.trim().split(/\s+/);
+  for (const arch of archs) {
+    if (!builtArchs.includes(arch)) {
+      throw new Error(`The built binary at ${binaryPath} is missing the ${arch} slice`);
+    }
   }
 }
 
@@ -89,6 +128,7 @@ async function main() {
   }
 
   await spawnAsync('strip', [outputPath]);
+  await verifyArchs(outputPath, archs);
   await spawnAsync('lipo', ['-info', outputPath]);
 }
 
