@@ -464,6 +464,38 @@ struct ExpoModuleMacroTests {
   }
 
   @Test
+  func `init with the right type but a different label does not satisfy the requirement and is still synthesized`() {
+    assertExpansion(
+      """
+      @ExpoModule
+      final class MyModule {
+        public required init(c: AppContext) {}
+      }
+      """,
+      expandedSource: """
+        final class MyModule {
+          public required init(c: AppContext) {}
+
+          public weak var appContext: AppContext?
+
+          public required init(appContext: AppContext) {
+            self.appContext = appContext
+          }
+
+          public func _synthesizedDefinition() -> [AnyDefinition] {
+            return [
+              Name("MyModule")
+            ]
+          }
+        }
+
+        extension MyModule: AnyModule {
+        }
+        """
+    )
+  }
+
+  @Test
   func `definition() is stamped with @ModuleDefinitionBuilder`() {
     assertExpansion(
       """

@@ -189,6 +189,14 @@ private func hasStoredProperty(_ classDecl: ClassDeclSyntax, named name: String)
   return false
 }
 
+/**
+ True if the class declares an initializer that satisfies the `init(appContext:)` protocol
+ requirement: a single parameter labeled `appContext` whose type is written as `AppContext`
+ (or `…​.AppContext`). Both must match — the label is part of the requirement, so
+ `init(c: AppContext)` does *not* satisfy it (we still synthesize ours), and the type guards
+ against a same-labeled init of an unrelated type. A macro can't resolve types, so this is a
+ syntactic match on the spelled name.
+ */
 private func hasAppContextInitializer(_ classDecl: ClassDeclSyntax) -> Bool {
   for member in classDecl.memberBlock.members {
     guard let initDecl = member.decl.as(InitializerDeclSyntax.self) else {
@@ -198,7 +206,7 @@ private func hasAppContextInitializer(_ classDecl: ClassDeclSyntax) -> Bool {
     guard params.count == 1, let param = params.first else {
       continue
     }
-    if param.firstName.text == "appContext" {
+    if param.firstName.text == "appContext", baseIdentifier(of: param.type) == "AppContext" {
       return true
     }
   }
