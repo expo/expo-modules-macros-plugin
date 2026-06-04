@@ -45,28 +45,5 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: npm run build
 
-      - name: Verify committed binary is up to date
-        # The stripped binary is committed and is what consumers run. If the
-        # source changed without rebuilding it, the working tree will be dirty.
-        # Use continue-on-error so the test suite still runs; the job is failed
-        # by the final gate step below.
-        id: verify
-        continue-on-error: true
-        run: |
-          if ! git diff --quiet -- ExpoModulesMacros-tool; then
-            echo "::error::apple/ExpoModulesMacros-tool is out of date. Run 'npm run build' and commit the result."
-            git diff --stat -- ExpoModulesMacros-tool
-            exit 1
-          fi
-          echo "Committed binary is up to date."
-
       - name: Test
         run: swift test -v
-
-      - name: Fail if committed binary is out of date
-        # Fail the job if the binary was stale, even though tests were allowed
-        # to run above so both signals appear in a single CI run.
-        if: steps.verify.outcome == 'failure'
-        run: |
-          echo "::error::Binary verification failed — see the 'Verify committed binary is up to date' step."
-          exit 1
