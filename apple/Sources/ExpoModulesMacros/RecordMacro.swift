@@ -174,18 +174,23 @@ private func recordProperties(
       guard let ident = binding.pattern.as(IdentifierPatternSyntax.self) else {
         continue
       }
-      guard let typeAnnotation = binding.typeAnnotation?.type else {
+      // Prefer the explicit annotation. When it's omitted, recover the type from a literal default
+      // (Swift's own default-literal type) — covers the common `var name = "foo"` case. Anything
+      // whose type a syntactic macro can't determine (calls, collections, member access) still needs
+      // an annotation.
+      let inferredType = binding.typeAnnotation?.type.trimmedDescription
+        ?? binding.initializer.flatMap { inferredLiteralType(of: $0.value) }
+      guard let type = inferredType else {
         throw MacroExpansionErrorMessage(
           "@Record properties must declare an explicit type — '\(ident.identifier.text)' has none"
         )
       }
-      let type = typeAnnotation.trimmedDescription
       properties.append(
         RecordProperty(
           name: ident.identifier.text,
           type: type,
           defaultValue: binding.initializer?.value.trimmedDescription,
-          isOptional: isOptionalType(typeAnnotation)
+          isOptional: binding.typeAnnotation.map { isOptionalType($0.type) } ?? false
         )
       )
     }
@@ -434,6 +439,29 @@ private func isExcludedByModifier(_ modifiers: DeclModifierListSyntax) -> Bool {
     }
   }
   return false
+}
+
+/**
+ The Swift default type of a literal expression — `String`, `Double`, `Int`, or `Bool` — or `nil`
+ when the expression isn't one of those literals. Used to recover a property's type when it has no
+ annotation but does have a literal default (`var name = "foo"` → `String`). This matches the type
+ Swift itself would infer for the same un-annotated declaration; expressions whose type a syntactic
+ macro can't know (function calls, collection literals, member access) return `nil`.
+ */
+private func inferredLiteralType(of expression: ExprSyntax) -> String? {
+  if expression.is(StringLiteralExprSyntax.self) {
+    return "String"
+  }
+  if expression.is(FloatLiteralExprSyntax.self) {
+    return "Double"
+  }
+  if expression.is(IntegerLiteralExprSyntax.self) {
+    return "Int"
+  }
+  if expression.is(BooleanLiteralExprSyntax.self) {
+    return "Bool"
+  }
+  return nil
 }
 
 /**

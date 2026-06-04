@@ -116,6 +116,113 @@ struct RecordMacroTests {
   }
 
   @Test
+  func `Property types are inferred from scalar literal defaults when the annotation is omitted`() {
+    assertExpansion(
+      """
+      @Record
+      struct Options {
+        var name = "foo"
+        var ratio = 1.0
+        var count = 0
+        var flag = false
+      }
+      """,
+      expandedSource: """
+        struct Options {
+          var name = "foo"
+          var ratio = 1.0
+          var count = 0
+          var flag = false
+
+          public init() {
+          }
+
+          public init(name: String, ratio: Double, count: Int, flag: Bool) {
+            self.name = name
+            self.ratio = ratio
+            self.count = count
+            self.flag = flag
+          }
+
+          @JavaScriptActor
+          public static func from(object: borrowing JavaScriptObject, appContext: AppContext) throws -> Self {
+            let nameJSValue = object.getProperty("name")
+            let name = nameJSValue.isUndefined() ? "foo" : try String.getDynamicType().cast(jsValue: nameJSValue, appContext: appContext) as! String
+            let ratioJSValue = object.getProperty("ratio")
+            let ratio = ratioJSValue.isUndefined() ? 1.0 : try Double.getDynamicType().cast(jsValue: ratioJSValue, appContext: appContext) as! Double
+            let countJSValue = object.getProperty("count")
+            let count = countJSValue.isUndefined() ? 0 : try Int.getDynamicType().cast(jsValue: countJSValue, appContext: appContext) as! Int
+            let flagJSValue = object.getProperty("flag")
+            let flag = flagJSValue.isUndefined() ? false : try Bool.getDynamicType().cast(jsValue: flagJSValue, appContext: appContext) as! Bool
+            return Self(name: name, ratio: ratio, count: count, flag: flag)
+          }
+
+          public static func from(dictionary: [String: Any], appContext: AppContext) throws -> Self {
+            let nameValue = dictionary["name"]
+            let name = nameValue == nil ? "foo" : try String.getDynamicType().cast(nameValue, appContext: appContext) as! String
+            let ratioValue = dictionary["ratio"]
+            let ratio = ratioValue == nil ? 1.0 : try Double.getDynamicType().cast(ratioValue, appContext: appContext) as! Double
+            let countValue = dictionary["count"]
+            let count = countValue == nil ? 0 : try Int.getDynamicType().cast(countValue, appContext: appContext) as! Int
+            let flagValue = dictionary["flag"]
+            let flag = flagValue == nil ? false : try Bool.getDynamicType().cast(flagValue, appContext: appContext) as! Bool
+            return Self(name: name, ratio: ratio, count: count, flag: flag)
+          }
+
+          public func toDictionary(appContext: AppContext? = nil) -> [String: Any] {
+            var dictionary: [String: Any] = [:]
+            dictionary["name"] = self.name
+            dictionary["ratio"] = self.ratio
+            dictionary["count"] = self.count
+            dictionary["flag"] = self.flag
+            return dictionary
+          }
+
+          @JavaScriptActor
+          public func toObject(appContext: AppContext) throws -> JavaScriptObject {
+            let object = try appContext.runtime.createObject()
+            object.setProperty("name", value: try String.getDynamicType().convertToJS(self.name, appContext: appContext))
+            object.setProperty("ratio", value: try Double.getDynamicType().convertToJS(self.ratio, appContext: appContext))
+            object.setProperty("count", value: try Int.getDynamicType().convertToJS(self.count, appContext: appContext))
+            object.setProperty("flag", value: try Bool.getDynamicType().convertToJS(self.flag, appContext: appContext))
+            return object
+          }
+        }
+
+        extension Options: Record {
+        }
+        """
+    )
+  }
+
+  @Test
+  func `A non-literal default without an annotation still requires an explicit type`() {
+    assertExpansion(
+      """
+      @Record
+      struct Options {
+        var items = []
+      }
+      """,
+      expandedSource: """
+        struct Options {
+          var items = []
+        }
+
+        extension Options: Record {
+        }
+        """,
+      diagnostics: [
+        DiagnosticSpec(
+          message: "@Record properties must declare an explicit type — 'items' has none",
+          line: 1,
+          column: 1
+        )
+      ]
+    )
+  }
+
+  @Test
   func `static, private and fileprivate properties and computed properties are excluded`() {
     assertExpansion(
       """
@@ -444,33 +551,6 @@ struct RecordMacroTests {
           }
         }
         """
-    )
-  }
-
-  @Test
-  func `A stored property without an explicit type annotation produces a diagnostic`() {
-    assertExpansion(
-      """
-      @Record
-      struct Options {
-        var name = "x"
-      }
-      """,
-      expandedSource: """
-        struct Options {
-          var name = "x"
-        }
-
-        extension Options: Record {
-        }
-        """,
-      diagnostics: [
-        DiagnosticSpec(
-          message: "@Record properties must declare an explicit type — 'name' has none",
-          line: 1,
-          column: 1
-        )
-      ]
     )
   }
 
