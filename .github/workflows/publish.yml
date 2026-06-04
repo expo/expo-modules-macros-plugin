@@ -36,8 +36,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
-          # Use the default token so the pushed tag/commit can trigger other
-          # workflows if needed, and so gh can create the release.
+          # The default token lets gh create the release and push the bump
+          # commit/tag. Note: commits pushed with GITHUB_TOKEN do NOT trigger
+          # other workflows (e.g. the Swift CI), by GitHub's design.
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup Node
@@ -57,14 +58,12 @@ jobs:
 
       - name: Bump version
         id: bump
-        # `npm version` updates package.json, commits, and creates a git tag.
+        # Only edit package.json here; the commit, tag and release are created
+        # at the end so a failed build/publish leaves the branch untouched.
         run: |
-          version=$(npm version "${{ inputs.release_type }}" -m "Release v%s")
+          version=$(npm version "${{ inputs.release_type }}" --no-git-tag-version)
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "Bumped to $version"
-
-      - name: Push commit and tag
-        run: git push --follow-tags origin HEAD
+          echo "Bumping to $version"
 
       - name: Select Xcode
         # Pin to an Xcode that ships Swift 6.2 (required by Package.swift).
@@ -91,6 +90,15 @@ jobs:
         # Authentication is handled via OIDC trusted publishing — no token needed.
         # npm generates provenance automatically when publishing via OIDC.
         run: npm publish --access public
+
+      # Everything below only runs once the publish above has succeeded.
+
+      - name: Commit, tag and push
+        run: |
+          version="${{ steps.bump.outputs.version }}"
+          git commit -am "Release $version"
+          git tag "$version"
+          git push --follow-tags origin HEAD
 
       - name: Create GitHub release
         env:
