@@ -295,9 +295,22 @@ struct ExpoModuleClassesTests {
           public func _synthesizedDefinition() -> [AnyDefinition] {
             return [
               Name("CustomName"),
-              Cache._synthesizedClassDefinition(),
-              Function("ping", ping)
+              Cache._synthesizedClassDefinition()
             ]
+          }
+
+          @JavaScriptActor
+          public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
+            object.setProperty("ping") { [weak appContext, self] this, arguments in
+              guard let appContext else {
+                throw Exceptions.AppContextLost()
+              }
+              guard arguments.count == 0 else {
+                throw Exception(name: "InvalidArgumentCount", description: "Function 'ping' expects 0 argument(s), but got \\(arguments.count)")
+              }
+              let result = self.ping()
+              return result.toJavaScriptValue(in: runtime)
+            }
           }
         }
         """
