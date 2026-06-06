@@ -81,7 +81,7 @@ struct ExpoModuleMacroTests {
   }
 
   @Test
-  func `Sync function generates a Function entry`() {
+  func `Sync function is bound directly into the JS object, not described with a Function entry`() {
     assertExpansion(
       """
       @ExpoModule
@@ -97,9 +97,23 @@ struct ExpoModuleMacroTests {
 
           public func _synthesizedDefinition() -> [AnyDefinition] {
             return [
-              Name("MyModule"),
-              Function("greet", greet)
+              Name("MyModule")
             ]
+          }
+
+          @JavaScriptActor
+          public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
+            object.setProperty("greet") { [weak appContext, self] this, arguments in
+              guard let appContext else {
+                throw Exceptions.AppContextLost()
+              }
+              guard arguments.count == 1 else {
+                throw Exception(name: "InvalidArgumentCount", description: "Function 'greet' expects 1 argument(s), but got \\(arguments.count)")
+              }
+              let arg0 = try arguments.unownedValue(at: 0).asString()
+              let result = self.greet(name: arg0)
+              return result.toJavaScriptValue(in: runtime)
+            }
           }
         }
         """
@@ -107,7 +121,87 @@ struct ExpoModuleMacroTests {
   }
 
   @Test
-  func `Async function generates an AsyncFunction entry with custom JS name`() {
+  func `Multi-argument function decodes each argument by its static type and preserves labels`() {
+    assertExpansion(
+      """
+      @ExpoModule
+      final class MyModule: Module {
+        @JS
+        func add(_ a: Double, to b: Double) -> Double { a + b }
+      }
+      """,
+      expandedSource: """
+        final class MyModule: Module {
+          @JavaScriptActor
+          func add(_ a: Double, to b: Double) -> Double { a + b }
+
+          public func _synthesizedDefinition() -> [AnyDefinition] {
+            return [
+              Name("MyModule")
+            ]
+          }
+
+          @JavaScriptActor
+          public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
+            object.setProperty("add") { [weak appContext, self] this, arguments in
+              guard let appContext else {
+                throw Exceptions.AppContextLost()
+              }
+              guard arguments.count == 2 else {
+                throw Exception(name: "InvalidArgumentCount", description: "Function 'add' expects 2 argument(s), but got \\(arguments.count)")
+              }
+              let arg0 = try arguments.unownedValue(at: 0).asDouble()
+              let arg1 = try arguments.unownedValue(at: 1).asDouble()
+              let result = self.add(arg0, to: arg1)
+              return result.toJavaScriptValue(in: runtime)
+            }
+          }
+        }
+        """
+    )
+  }
+
+  @Test
+  func `Void throwing function calls through with try and returns undefined`() {
+    assertExpansion(
+      """
+      @ExpoModule
+      final class MyModule: Module {
+        @JS("doReset")
+        func reset() throws {}
+      }
+      """,
+      expandedSource: """
+        final class MyModule: Module {
+          @JavaScriptActor
+          func reset() throws {}
+
+          public func _synthesizedDefinition() -> [AnyDefinition] {
+            return [
+              Name("MyModule")
+            ]
+          }
+
+          @JavaScriptActor
+          public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
+            object.setProperty("doReset") { [weak appContext, self] this, arguments in
+              guard let appContext else {
+                throw Exceptions.AppContextLost()
+              }
+              guard arguments.count == 0 else {
+                throw Exception(name: "InvalidArgumentCount", description: "Function 'doReset' expects 0 argument(s), but got \\(arguments.count)")
+              }
+              try self.reset()
+              return .undefined
+            }
+          }
+        }
+        """
+    )
+  }
+
+  @Test
+  func `Async function is bound with an async binding and the async setProperty overload`() {
     assertExpansion(
       """
       @ExpoModule
@@ -122,9 +216,61 @@ struct ExpoModuleMacroTests {
 
           public func _synthesizedDefinition() -> [AnyDefinition] {
             return [
-              Name("MyModule"),
-              AsyncFunction("doWork", performWork)
+              Name("MyModule")
             ]
+          }
+
+          @JavaScriptActor
+          public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
+            object.setProperty("doWork") { [weak appContext, self] this, arguments in
+              guard let appContext else {
+                throw Exceptions.AppContextLost()
+              }
+              guard arguments.count == 0 else {
+                throw Exception(name: "InvalidArgumentCount", description: "Function 'doWork' expects 0 argument(s), but got \\(arguments.count)")
+              }
+              try await self.performWork()
+              return .undefined
+            }
+          }
+        }
+        """
+    )
+  }
+
+  @Test
+  func `Async function with arguments and a return value awaits the call and converts the result`() {
+    assertExpansion(
+      """
+      @ExpoModule
+      final class MyModule: Module {
+        @JS
+        func fetchValue(key: String) async throws -> Int { 0 }
+      }
+      """,
+      expandedSource: """
+        final class MyModule: Module {
+          func fetchValue(key: String) async throws -> Int { 0 }
+
+          public func _synthesizedDefinition() -> [AnyDefinition] {
+            return [
+              Name("MyModule")
+            ]
+          }
+
+          @JavaScriptActor
+          public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
+            object.setProperty("fetchValue") { [weak appContext, self] this, arguments in
+              guard let appContext else {
+                throw Exceptions.AppContextLost()
+              }
+              guard arguments.count == 1 else {
+                throw Exception(name: "InvalidArgumentCount", description: "Function 'fetchValue' expects 1 argument(s), but got \\(arguments.count)")
+              }
+              let arg0 = try arguments.unownedValue(at: 0).asString()
+              let result = try await self.fetchValue(key: arg0)
+              return result.toJavaScriptValue(in: runtime)
+            }
           }
         }
         """
@@ -186,11 +332,25 @@ struct ExpoModuleMacroTests {
           public func _synthesizedDefinition() -> [AnyDefinition] {
             return [
               Name("MyModule"),
-              Function("greet", greet),
               Property("status") {
                 self.status
               }
             ]
+          }
+
+          @JavaScriptActor
+          public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
+            object.setProperty("greet") { [weak appContext, self] this, arguments in
+              guard let appContext else {
+                throw Exceptions.AppContextLost()
+              }
+              guard arguments.count == 1 else {
+                throw Exception(name: "InvalidArgumentCount", description: "Function 'greet' expects 1 argument(s), but got \\(arguments.count)")
+              }
+              let arg0 = try arguments.unownedValue(at: 0).asString()
+              let result = self.greet(name: arg0)
+              return result.toJavaScriptValue(in: runtime)
+            }
           }
         }
         """
@@ -213,63 +373,22 @@ struct ExpoModuleMacroTests {
 
           public func _synthesizedDefinition() -> [AnyDefinition] {
             return [
-              Name("MyModule"),
-              Function("compute", compute)
+              Name("MyModule")
             ]
           }
-        }
-        """
-    )
-  }
 
-  @Test
-  func `members already on a global actor are not stamped`() {
-    assertExpansion(
-      """
-      @ExpoModule
-      final class MyModule: Module {
-        @JS
-        @MainActor
-        func uiOnly() -> Int { 0 }
-      }
-      """,
-      expandedSource: """
-        final class MyModule: Module {
-          @MainActor
-          func uiOnly() -> Int { 0 }
-
-          public func _synthesizedDefinition() -> [AnyDefinition] {
-            return [
-              Name("MyModule"),
-              Function("uiOnly", uiOnly)
-            ]
-          }
-        }
-        """
-    )
-  }
-
-  @Test
-  func `members of an actor-isolated class are not stamped`() {
-    assertExpansion(
-      """
-      @ExpoModule
-      @MainActor
-      final class MyModule: Module {
-        @JS
-        func uiOnly() -> Int { 0 }
-      }
-      """,
-      expandedSource: """
-        @MainActor
-        final class MyModule: Module {
-          func uiOnly() -> Int { 0 }
-
-          public func _synthesizedDefinition() -> [AnyDefinition] {
-            return [
-              Name("MyModule"),
-              Function("uiOnly", uiOnly)
-            ]
+          @JavaScriptActor
+          public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
+            object.setProperty("compute") { [weak appContext, self] this, arguments in
+              guard let appContext else {
+                throw Exceptions.AppContextLost()
+              }
+              guard arguments.count == 0 else {
+                throw Exception(name: "InvalidArgumentCount", description: "Function 'compute' expects 0 argument(s), but got \\(arguments.count)")
+              }
+              let result = self.compute()
+              return result.toJavaScriptValue(in: runtime)
+            }
           }
         }
         """

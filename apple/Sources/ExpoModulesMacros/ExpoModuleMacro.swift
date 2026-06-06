@@ -42,6 +42,12 @@ public struct ExpoModuleMacro: MemberMacro {
     let moduleName = jsNameArgument(of: node) ?? classDecl.name.text
     var entries: [String] = ["Name(\"\(moduleName)\")"]
 
+    // `@JS func`s (sync and async) are bound directly into the JS object by the synthesized
+    // `_decorateModule` rather than described with a `Function(...)` / `AsyncFunction(...)` DSL entry,
+    // so they're collected here instead of appended to `entries`. Properties still go through
+    // the DSL for now.
+    var functions: [JSFunction] = []
+
     for typeName in classListArgument(of: node, label: "classes") {
       entries.append("\(typeName)._synthesizedClassDefinition()")
     }
@@ -51,7 +57,7 @@ public struct ExpoModuleMacro: MemberMacro {
 
       if let funcDecl = decl.as(FunctionDeclSyntax.self),
         let attribute = funcDecl.attributes.firstAttribute(named: "JS") {
-        entries.append(buildFunctionEntry(funcDecl: funcDecl, attribute: attribute))
+        functions.append(JSFunction(funcDecl: funcDecl, attribute: attribute))
         continue
       }
 
@@ -93,6 +99,13 @@ public struct ExpoModuleMacro: MemberMacro {
       }
       """
     emitted.append(method)
+
+    // Direct JSI binding: one `_decorateModule` that binds each `@JS func` into the module's JS object,
+    // with the decode-call-encode body inlined into each closure. Only emitted when there are
+    // functions to bind.
+    if !functions.isEmpty {
+      emitted.append(buildDecorateJavaScriptObject(functions: functions))
+    }
 
     return emitted
   }
@@ -214,17 +227,6 @@ private func hasAppContextInitializer(_ classDecl: ClassDeclSyntax) -> Bool {
 }
 
 // MARK: - Member builders
-
-private func buildFunctionEntry(
-  funcDecl: FunctionDeclSyntax,
-  attribute: AttributeSyntax
-) -> String {
-  let swiftName = funcDecl.name.text
-  let jsName = jsNameArgument(of: attribute) ?? swiftName
-  let isAsync = funcDecl.signature.effectSpecifiers?.asyncSpecifier != nil
-  let dslEntry = isAsync ? "AsyncFunction" : "Function"
-  return "\(dslEntry)(\"\(jsName)\", \(swiftName))"
-}
 
 private func buildPropertyEntries(
   varDecl: VariableDeclSyntax,
