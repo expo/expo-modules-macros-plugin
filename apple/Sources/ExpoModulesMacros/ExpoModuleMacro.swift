@@ -42,11 +42,11 @@ public struct ExpoModuleMacro: MemberMacro {
     let moduleName = jsNameArgument(of: node) ?? classDecl.name.text
     var entries: [String] = ["Name(\"\(moduleName)\")"]
 
-    // `@JS func`s (sync and async) are bound directly into the JS object by the synthesized
-    // `_decorateModule` rather than described with a `Function(...)` / `AsyncFunction(...)` DSL entry,
-    // so they're collected here instead of appended to `entries`. Properties still go through
-    // the DSL for now.
+    // `@JS func`s (sync and async) and `@JS var`s are bound directly into the JS object by the
+    // synthesized `_decorateModule` rather than described with a `Function(...)` / `Property(...)`
+    // DSL entry, so they're collected here instead of appended to `entries`.
     var functions: [JSFunction] = []
+    var properties: [JSProperty] = []
 
     for typeName in classListArgument(of: node, label: "classes") {
       entries.append("\(typeName)._synthesizedClassDefinition()")
@@ -63,7 +63,7 @@ public struct ExpoModuleMacro: MemberMacro {
 
       if let varDecl = decl.as(VariableDeclSyntax.self),
         let attribute = varDecl.attributes.firstAttribute(named: "JS") {
-        entries.append(contentsOf: buildPropertyEntries(varDecl: varDecl, attribute: attribute))
+        properties.append(contentsOf: collectProperties(varDecl: varDecl, attribute: attribute))
       }
     }
 
@@ -100,11 +100,11 @@ public struct ExpoModuleMacro: MemberMacro {
       """
     emitted.append(method)
 
-    // Direct JSI binding: one `_decorateModule` that binds each `@JS func` into the module's JS object,
-    // with the decode-call-encode body inlined into each closure. Only emitted when there are
-    // functions to bind.
-    if !functions.isEmpty {
-      emitted.append(buildDecorateJavaScriptObject(functions: functions))
+    // Direct JSI binding: one `_decorateModule` that binds each `@JS func` (inlined `setProperty`
+    // closure) and each `@JS var` (a `defineProperty` get/set accessor) into the module's JS object.
+    // Only emitted when there's at least one member to bind.
+    if !functions.isEmpty || !properties.isEmpty {
+      emitted.append(buildDecorateJavaScriptObject(functions: functions, properties: properties))
     }
 
     return emitted
@@ -228,19 +228,52 @@ private func hasAppContextInitializer(_ classDecl: ClassDeclSyntax) -> Bool {
 
 // MARK: - Member builders
 
-private func buildPropertyEntries(
+private func collectProperties(
   varDecl: VariableDeclSyntax,
   attribute: AttributeSyntax
-) -> [String] {
+) -> [JSProperty] {
   let jsNameOverride = jsNameArgument(of: attribute)
+  // A `let` is never settable; only `var` bindings can carry a setter.
+  let isVar = varDecl.bindingSpecifier.tokenKind == .keyword(.var)
 
   return varDecl.bindings.compactMap { binding in
     guard let ident = binding.pattern.as(IdentifierPatternSyntax.self) else {
       return nil
     }
     let swiftName = ident.identifier.text
-    let jsName = jsNameOverride ?? swiftName
-    return "Property(\"\(jsName)\") { self.\(swiftName) }"
+    // Prefer the explicit annotation; recover the type from a literal default (`var x = false`)
+    // when there's none. `nil` falls back to inference at the use site.
+    let valueType = binding.typeAnnotation?.type.trimmedDescription
+      ?? binding.initializer.flatMap { inferredLiteralType(of: $0.value) }
+    return JSProperty(
+      swiftName: swiftName,
+      jsName: jsNameOverride ?? swiftName,
+      valueType: valueType,
+      isSettable: isVar && bindingIsSettable(binding)
+    )
+  }
+}
+
+/// Whether a `var` binding is settable from JS. A stored property (no accessor block) is settable;
+/// a computed property is settable only when it declares an explicit `set` accessor. A getter-only
+/// computed property (`{ get }` or a single getter body) stays read-only. `willSet`/`didSet`
+/// observers imply stored storage, which is also settable.
+private func bindingIsSettable(_ binding: PatternBindingSyntax) -> Bool {
+  guard let accessorBlock = binding.accessorBlock else {
+    return true
+  }
+  switch accessorBlock.accessors {
+  case .accessors(let accessors):
+    return accessors.contains { accessor in
+      switch accessor.accessorSpecifier.tokenKind {
+      case .keyword(.set), .keyword(.willSet), .keyword(.didSet):
+        return true
+      default:
+        return false
+      }
+    }
+  case .getter:
+    return false
   }
 }
 

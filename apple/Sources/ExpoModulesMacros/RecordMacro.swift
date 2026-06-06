@@ -454,29 +454,6 @@ private func isExcludedByModifier(_ modifiers: DeclModifierListSyntax) -> Bool {
 }
 
 /**
- The Swift default type of a literal expression — `String`, `Double`, `Int`, or `Bool` — or `nil`
- when the expression isn't one of those literals. Used to recover a property's type when it has no
- annotation but does have a literal default (`var name = "foo"` → `String`). This matches the type
- Swift itself would infer for the same un-annotated declaration; expressions whose type a syntactic
- macro can't know (function calls, collection literals, member access) return `nil`.
- */
-private func inferredLiteralType(of expression: ExprSyntax) -> String? {
-  if expression.is(StringLiteralExprSyntax.self) {
-    return "String"
-  }
-  if expression.is(FloatLiteralExprSyntax.self) {
-    return "Double"
-  }
-  if expression.is(IntegerLiteralExprSyntax.self) {
-    return "Int"
-  }
-  if expression.is(BooleanLiteralExprSyntax.self) {
-    return "Bool"
-  }
-  return nil
-}
-
-/**
  True if the type syntax is optional: `T?`, `T!`, or the spelled-out `Optional<T>`.
  */
 private func isOptionalType(_ type: TypeSyntax) -> Bool {

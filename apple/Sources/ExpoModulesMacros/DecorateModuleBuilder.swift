@@ -34,14 +34,6 @@ internal struct JSFunction {
     self.isAsync = effectSpecifiers?.asyncSpecifier != nil
   }
 
-  /**
-   The `#name` host-function body: a `@JavaScriptActor private func` matching the
-   `createFunction` closure shape `(this, arguments) throws -> JavaScriptValue`, threading
-   `appContext`/`runtime` in as parameters. It checks arity, decodes each argument by its static
-   type — primitives through a direct typed accessor (`asDouble()`, …) on a borrowed
-   `JavaScriptUnownedValue`, other types through the
-   `T.getDynamicType()` converter — calls `self.<name>(...)`, and converts the result back to JS.
-   */
   /// The decode-call-encode statements that form the host-function body, indented with the given
   /// prefix. Arity guard, then per-argument decode (primitives via a direct typed accessor like
   /// `asDouble()` on a zero-copy `arguments.unownedValue(at:)`, others via `getDynamicType().cast(...)`),
@@ -147,17 +139,126 @@ internal struct JSFunction {
   }
 }
 
-/**
- The single generated function that decorates the module's JS object. Core supplies the object;
- this binds every `@JS func` into it via one inlined `setProperty` closure per function. Mirrors
- core's `ObjectDefinition.decorate(object:)`, including its `borrowing` object parameter (it
- mutates through the reference without reassigning or taking ownership). Named `_decorateModule`
- with the leading-underscore convention for synthesized members the **runtime calls by name**; the
- `ExpoModule` suffix names the `@ExpoModule` macro it came from (a shared object's counterpart is
- `_decorateSharedObject`).
- */
-internal func buildDecorateJavaScriptObject(functions: [JSFunction]) -> DeclSyntax {
-  let body = functions.map { $0.decorateStatements }.joined(separator: "\n")
+/// A `@JS var` collected for **direct JSI binding**. Instead of describing the property with a
+/// `Property(...)` DSL entry, `@ExpoModule` synthesizes a get/set accessor into the module's JS
+/// object inside `_decorateModule`: it builds a descriptor object (`enumerable` + `get`, and `set`
+/// when the property is settable) and installs it with `object.defineProperty(name, descriptor:)`,
+/// mirroring core's `PropertyDefinition.buildDescriptor`. The `get`/`set` host functions are
+/// installed the same way `@JS func`s are — the closure-taking `setProperty(_:)` overload, with the
+/// read/write body inlined into the closure.
+///
+/// The receiver is the module's real `self`, so the getter reads `self.<name>` and the setter writes
+/// `self.<name> = …` directly, ignoring the JS `this`. Decode/encode of the value reuse the same
+/// static-type fast path as functions (primitives through a direct typed accessor / `toJavaScriptValue`,
+/// other types through the `getDynamicType()` converter).
+internal struct JSProperty {
+  let swiftName: String
+  let jsName: String
+  /// The property's value type as written, or `nil` when it couldn't be inferred (no annotation and
+  /// no literal default). When `nil` the getter still works (the encode infers from `self.<name>`)
+  /// but the setter uses an untyped closure parameter.
+  let valueType: String?
+  /// Whether the property is settable from JS: `true` for a stored `var` or a computed `var` with an
+  /// explicit `set` accessor; `false` for a getter-only computed `var` or a `let`.
+  let isSettable: Bool
+
+  /// The statements that install this property's accessor on the JS object, indented for the
+  /// `_decorateModule` body. Builds a descriptor object (`enumerable` + `get`, and `set` when
+  /// settable) via the closure-taking `setProperty(_:)` overload — with the read/write body inlined
+  /// into each closure — and installs it with `object.defineProperty(name, descriptor:)`. Capture
+  /// matches the function bindings: `self` strong, `appContext` weak + guarded — and, like functions,
+  /// the `appContext` capture + guard are omitted from an accessor whose body never references it (a
+  /// primitive value, decoded/encoded without the dynamic converter), to avoid the unused-capture
+  /// warning. Getter and setter are gated independently.
+  var decorateStatements: String {
+    let descriptorName = "\(swiftName)Descriptor"
+    // A primitive value type encodes/decodes without `getDynamicType()`, so its accessor body never
+    // references `appContext`. `nil` (untyped) goes through the dynamic-less `toJavaScriptValue`
+    // getter, which also doesn't use it.
+    let usesAppContext = valueType.map { fastDecodeAccessor(for: $0) == nil } ?? false
+    var lines: [String] = []
+
+    lines.append("let \(descriptorName) = runtime.createObject()")
+    lines.append("\(descriptorName).setProperty(\"enumerable\", value: true)")
+
+    // Getter: read `self.<name>` and encode the result back to JS.
+    let getEncode: String
+    if let valueType, fastDecodeAccessor(for: valueType) != nil {
+      getEncode = "return self.\(swiftName).toJavaScriptValue(in: runtime)"
+    } else if let valueType {
+      getEncode =
+        "return try \(valueType).getDynamicType().castToJS(self.\(swiftName), appContext: appContext, in: runtime)"
+    } else {
+      // No known type: fall back to converting whatever `self.<name>` is. This only happens when the
+      // declaration has neither an annotation nor a literal default, which is rare for a stored var.
+      getEncode = "return self.\(swiftName).toJavaScriptValue(in: runtime)"
+    }
+    lines.append(accessorClosure(descriptorName, "get", usesAppContext: usesAppContext, body: getEncode))
+
+    // Setter: decode argument 0 by the static type and write `self.<name>`. A typed setter needs a
+    // known value type; when the type couldn't be inferred the property is bound getter-only (a
+    // settable var with neither an annotation nor a literal default is rare and can't be decoded).
+    if isSettable, let valueType {
+      let setDecode: String
+      if let accessor = fastDecodeAccessor(for: valueType) {
+        setDecode = "self.\(swiftName) = try arguments.unownedValue(at: 0).\(accessor)()"
+      } else {
+        setDecode =
+          "self.\(swiftName) = try \(valueType).getDynamicType().cast(jsValue: arguments[0], appContext: appContext) as! \(valueType)"
+      }
+      lines.append(
+        accessorClosure(descriptorName, "set", usesAppContext: usesAppContext, body: "\(setDecode)\nreturn .undefined"))
+    }
+
+    lines.append("object.defineProperty(\"\(jsName)\", descriptor: \(descriptorName))")
+
+    return lines
+      .flatMap { $0.split(separator: "\n", omittingEmptySubsequences: false) }
+      .map { "  " + $0 }
+      .joined(separator: "\n")
+  }
+
+  /// One `descriptor.setProperty("get"/"set") { … }` accessor entry. Captures `self` strong and, when
+  /// `usesAppContext`, `appContext` weak + guarded (matching the function bindings); otherwise the
+  /// capture and guard are omitted so a primitive accessor doesn't warn on an unused capture.
+  private func accessorClosure(
+    _ descriptorName: String, _ key: String, usesAppContext: Bool, body: String
+  ) -> String {
+    // Indent each line of a (possibly multi-line) body to sit one level inside the closure, aligned
+    // with the `guard`; a bare `\(body)` interpolation would only indent the first line.
+    let indentedBody = body
+      .split(separator: "\n", omittingEmptySubsequences: false)
+      .map { "  \($0)" }
+      .joined(separator: "\n")
+    if usesAppContext {
+      return """
+        \(descriptorName).setProperty("\(key)") { [weak appContext, self] this, arguments in
+          guard let appContext else {
+            throw Exceptions.AppContextLost()
+          }
+        \(indentedBody)
+        }
+        """
+    }
+    return """
+      \(descriptorName).setProperty("\(key)") { [self] this, arguments in
+      \(indentedBody)
+      }
+      """
+  }
+}
+
+/// The single generated function that decorates the module's JS object. Core supplies the object;
+/// this binds every `@JS func` (via an inlined `setProperty` closure) and every `@JS var` (via a
+/// `defineProperty` accessor) into it. Mirrors core's `ObjectDefinition.decorate(object:)`, including
+/// its `borrowing` object parameter (it mutates through the reference without reassigning or taking
+/// ownership). Named `_decorateModule` with the leading-underscore convention for synthesized members
+/// the **runtime calls by name**; the `ExpoModule` suffix names the `@ExpoModule` macro it came from (a
+/// shared object's counterpart is `_decorateSharedObject`).
+internal func buildDecorateJavaScriptObject(functions: [JSFunction], properties: [JSProperty]) -> DeclSyntax {
+  let functionBody = functions.map { $0.decorateStatements }
+  let propertyBody = properties.map { $0.decorateStatements }
+  let body = (functionBody + propertyBody).joined(separator: "\n")
   return """
     @JavaScriptActor
     public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
