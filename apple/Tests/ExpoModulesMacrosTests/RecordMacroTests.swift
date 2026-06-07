@@ -54,6 +54,12 @@ struct RecordMacroTests {
           var count: Int = 0
           var note: String?
 
+          private func _assertTypesConformance() {
+            func note<T: AnyArgument>(_: T.Type) {
+            }
+            note(String?.self)
+          }
+
           public init() {
             fatalError("\\(Self.self) has required properties and cannot be created with init(); construct it through the @Record-synthesized from(dictionary:) or from(object:) factories")
           }
@@ -107,12 +113,6 @@ struct RecordMacroTests {
             object.setProperty("note", value: try String?.getDynamicType().convertToJS(self.note, appContext: appContext))
             return object
           }
-
-          private func _assertTypesConformance() {
-            func note<T: AnyArgument>(_: T.Type) {
-            }
-            note(String?.self)
-          }
         }
 
         extension Options: Record {
@@ -137,6 +137,15 @@ struct RecordMacroTests {
           var primary: MyRecord
           var tags: [String]
           var count: Int = 0
+
+          private func _assertTypesConformance() {
+            func primary<T: AnyArgument>(_: T.Type) {
+            }
+            primary(MyRecord.self)
+            func tags<T: AnyArgument>(_: T.Type) {
+            }
+            tags([String].self)
+          }
 
           public init() {
             fatalError("\\(Self.self) has required properties and cannot be created with init(); construct it through the @Record-synthesized from(dictionary:) or from(object:) factories")
@@ -196,15 +205,6 @@ struct RecordMacroTests {
             object.setProperty("tags", value: try [String].getDynamicType().convertToJS(self.tags, appContext: appContext))
             object.setProperty("count", value: try Int.getDynamicType().convertToJS(self.count, appContext: appContext))
             return object
-          }
-
-          private func _assertTypesConformance() {
-            func primary<T: AnyArgument>(_: T.Type) {
-            }
-            primary(MyRecord.self)
-            func tags<T: AnyArgument>(_: T.Type) {
-            }
-            tags([String].self)
           }
         }
 
