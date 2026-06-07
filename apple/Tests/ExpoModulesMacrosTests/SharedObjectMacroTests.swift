@@ -116,12 +116,6 @@ struct SharedObjectMacroTests {
           @JavaScriptActor
           func get(_ key: String) -> String? { nil }
 
-          private func _assertTypesConformance_get() {
-            func get<T: AnyArgument>(_: T.Type) {
-            }
-            get(String?.self)
-          }
-
           public static func _synthesizedClassDefinition() -> ClassDefinition {
             return Class("Cache", Cache.self) {
               Function("get") { (this: Cache, _ arg0: String) in
@@ -152,6 +146,39 @@ struct SharedObjectMacroTests {
             return Class("Cache", Cache.self) {
               AsyncFunction("loadAsync") { (this: Cache) in
                 try await this.load()
+              }
+            }
+          }
+        }
+        """
+    )
+  }
+
+  @Test
+  func `An optional property type is unwrapped to its core type in the assertion`() {
+    assertExpansion(
+      """
+      @SharedObject
+      final class Cache: SharedObject {
+        @JS
+        var owner: SomeType!
+      }
+      """,
+      expandedSource: """
+        final class Cache: SharedObject {
+          @JavaScriptActor
+          var owner: SomeType!
+
+          private func _assertTypesConformance_owner() {
+            func owner<T: AnyArgument>(_: T.Type) {
+            }
+            owner(SomeType.self)
+          }
+
+          public static func _synthesizedClassDefinition() -> ClassDefinition {
+            return Class("Cache", Cache.self) {
+              Property("owner") { (this: Cache) in
+                this.owner
               }
             }
           }
@@ -236,12 +263,6 @@ struct SharedObjectMacroTests {
           init(name: String) {}
           @JavaScriptActor
           func get(_ key: String) -> String? { nil }
-
-          private func _assertTypesConformance_get() {
-            func get<T: AnyArgument>(_: T.Type) {
-            }
-            get(String?.self)
-          }
           @JavaScriptActor
           var size: Int { 42 }
 

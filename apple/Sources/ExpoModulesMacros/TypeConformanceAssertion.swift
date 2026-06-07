@@ -72,10 +72,12 @@ internal func typeConformanceAssertions(for assertions: [ConformanceAssertion]) 
 /// puts the member's name in the compiler's conformance diagnostic. Returns `nil` when every type was
 /// a known-conforming primitive or the list was empty.
 private func conformanceAssertionBody(_ assertion: ConformanceAssertion) -> String? {
-  // Dedup so each type is asserted once even when it appears more than once; skip known primitives.
+  // Unwrap top-level optionals to the core type, then dedup so each type is asserted once even when
+  // it appears more than once; skip known primitives.
   var seen: Set<String> = []
   var distinct: [String] = []
-  for type in assertion.types where !knownConformingPrimitives.contains(type) && seen.insert(type).inserted {
+  for type in assertion.types.map(unwrappedOptional)
+  where !knownConformingPrimitives.contains(type) && seen.insert(type).inserted {
     distinct.append(type)
   }
   guard !distinct.isEmpty else {
@@ -85,4 +87,19 @@ private func conformanceAssertionBody(_ assertion: ConformanceAssertion) -> Stri
   var lines = ["func \(assertion.name)<T: \(jsConvertibleProtocolName)>(_: T.Type) {}"]
   lines.append(contentsOf: distinct.map { "\(assertion.name)(\($0).self)" })
   return lines.joined(separator: "\n")
+}
+
+/// Strips every trailing optional marker (`?`/`!`) so the assertion targets the core wrapped type.
+/// `Optional<W>: AnyArgument` holds exactly when `W: AnyArgument` (and `T!` is just `T?`), so each
+/// layer is conformance-equivalent to its wrapped type. Asserting the core gives a cleaner diagnostic
+/// (the direct `requires that '<type>' conform`, not the conditional-conformance phrasing through
+/// `Optional`) and sidesteps that `T!.self` is invalid in metatype position. Only *trailing* markers
+/// are stripped, so `[Int?]` keeps its inner `?`; a longhand `Optional<W>` isn't peeled but is still
+/// asserted whole, which remains correct.
+private func unwrappedOptional(_ type: String) -> String {
+  var result = Substring(type)
+  while result.hasSuffix("?") || result.hasSuffix("!") {
+    result = result.dropLast()
+  }
+  return String(result)
 }

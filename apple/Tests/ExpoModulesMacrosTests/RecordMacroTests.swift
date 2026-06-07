@@ -54,12 +54,6 @@ struct RecordMacroTests {
           var count: Int = 0
           var note: String?
 
-          private func _assertTypesConformance() {
-            func note<T: AnyArgument>(_: T.Type) {
-            }
-            note(String?.self)
-          }
-
           public init() {
             fatalError("\\(Self.self) has required properties and cannot be created with init(); construct it through the @Record-synthesized from(dictionary:) or from(object:) factories")
           }
