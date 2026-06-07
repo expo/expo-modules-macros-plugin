@@ -116,6 +116,12 @@ struct SharedObjectMacroTests {
           @JavaScriptActor
           func get(_ key: String) -> String? { nil }
 
+          private func _assertTypesConformance_get() {
+            func get<T: AnyArgument>(_: T.Type) {
+            }
+            get(String?.self)
+          }
+
           public static func _synthesizedClassDefinition() -> ClassDefinition {
             return Class("Cache", Cache.self) {
               Function("get") { (this: Cache, _ arg0: String) in
@@ -230,6 +236,12 @@ struct SharedObjectMacroTests {
           init(name: String) {}
           @JavaScriptActor
           func get(_ key: String) -> String? { nil }
+
+          private func _assertTypesConformance_get() {
+            func get<T: AnyArgument>(_: T.Type) {
+            }
+            get(String?.self)
+          }
           @JavaScriptActor
           var size: Int { 42 }
 

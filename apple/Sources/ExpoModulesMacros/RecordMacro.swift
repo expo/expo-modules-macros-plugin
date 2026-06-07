@@ -71,6 +71,15 @@ public struct RecordMacro: MemberMacro, ExtensionMacro {
     members.append(fromDictionaryFactory(properties: properties))
     members.append(toDictionaryMethod(properties: properties, inheritsRecord: inheritsRecord))
     members.append(toObjectMethod(properties: properties, inheritsRecord: inheritsRecord))
+
+    // A single never-called member that makes the compiler verify each property type is
+    // JS-convertible (the conversions above go through its dynamic-type API). Each property keeps its
+    // own named assertion inside, so the compiler's conformance diagnostic still names the offending
+    // property (see `typeConformanceAssertions`).
+    let assertions = properties.map { ConformanceAssertion(name: $0.name, types: [$0.type]) }
+    if let assertionMember = typeConformanceAssertions(for: assertions) {
+      members.append(assertionMember)
+    }
     return members
   }
 

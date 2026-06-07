@@ -162,6 +162,100 @@ struct ExpoModuleMacroTests {
   }
 
   @Test
+  func `Non-primitive argument and return types get a conformance-assertion peer`() {
+    assertExpansion(
+      """
+      @ExpoModule
+      final class MyModule: Module {
+        @JS
+        func transform(value: MyRecord, count: Int) -> [MyRecord] { [] }
+      }
+      """,
+      expandedSource: """
+        final class MyModule: Module {
+          @JavaScriptActor
+          func transform(value: MyRecord, count: Int) -> [MyRecord] { [] }
+
+          private func _assertTypesConformance_transform() {
+            func transform<T: AnyArgument>(_: T.Type) {
+            }
+            transform(MyRecord.self)
+            transform([MyRecord].self)
+          }
+
+          public func _synthesizedDefinition() -> [AnyDefinition] {
+            return [
+              Name("MyModule")
+            ]
+          }
+
+          @JavaScriptActor
+          public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
+            object.setProperty("transform") { [weak appContext, self] this, arguments in
+              guard let appContext else {
+                throw Exceptions.AppContextLost()
+              }
+              guard arguments.count == 2 else {
+                throw Exception(name: "InvalidArgumentCount", description: "Function 'transform' expects 2 argument(s), but got \\(arguments.count)")
+              }
+              let arg0 = try MyRecord.getDynamicType().cast(jsValue: arguments[0], appContext: appContext) as! MyRecord
+              let arg1 = try arguments.unownedValue(at: 1).asInt()
+              let result = self.transform(value: arg0, count: arg1)
+              return try [MyRecord].getDynamicType().castToJS(result, appContext: appContext, in: runtime)
+            }
+          }
+        }
+        """
+    )
+  }
+
+  @Test
+  func `Static function emits a static conformance-assertion peer`() {
+    assertExpansion(
+      """
+      @ExpoModule
+      final class MyModule: Module {
+        @JS
+        static func describe(_ value: MyRecord) -> String { "" }
+      }
+      """,
+      expandedSource: """
+        final class MyModule: Module {
+          @JavaScriptActor
+          static func describe(_ value: MyRecord) -> String { "" }
+
+          private static func _assertTypesConformance_describe() {
+            func describe<T: AnyArgument>(_: T.Type) {
+            }
+            describe(MyRecord.self)
+          }
+
+          public func _synthesizedDefinition() -> [AnyDefinition] {
+            return [
+              Name("MyModule")
+            ]
+          }
+
+          @JavaScriptActor
+          public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
+            object.setProperty("describe") { [weak appContext, self] this, arguments in
+              guard let appContext else {
+                throw Exceptions.AppContextLost()
+              }
+              guard arguments.count == 1 else {
+                throw Exception(name: "InvalidArgumentCount", description: "Function 'describe' expects 1 argument(s), but got \\(arguments.count)")
+              }
+              let arg0 = try MyRecord.getDynamicType().cast(jsValue: arguments[0], appContext: appContext) as! MyRecord
+              let result = self.describe(arg0)
+              return result.toJavaScriptValue(in: runtime)
+            }
+          }
+        }
+        """
+    )
+  }
+
+  @Test
   func `Void throwing function calls through with try and returns undefined`() {
     assertExpansion(
       """
