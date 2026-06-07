@@ -112,16 +112,37 @@ internal struct JSFunction {
   /// **strong** — the host-function closure is what keeps the native callable alive for as long as
   /// JS can invoke it; its lifetime is bounded by the JS VM's garbage collection of the object.
   /// `appContext` is captured **weak** (and guarded) so it doesn't form a real retain cycle through
-  /// the app context.
+  /// the app context. When no argument or return value goes through the dynamic-type converter the
+  /// body never references `appContext`, so the capture and guard are omitted to avoid the
+  /// unused-capture warning.
   var decorateStatements: String {
-    return """
-        object.setProperty("\(jsName)") { [weak appContext, self] this, arguments in
+    let captureList = usesAppContext ? "[weak appContext, self]" : "[self]"
+    let guardClause = usesAppContext
+      ? """
+
           guard let appContext else {
             throw Exceptions.AppContextLost()
           }
+      """
+      : ""
+    return """
+        object.setProperty("\(jsName)") { \(captureList) this, arguments in\(guardClause)
       \(bodyStatements(indent: "    "))
         }
       """
+  }
+
+  /// True when the host-function body references `appContext` — i.e. some parameter or the return
+  /// type lacks a fast accessor and decodes/encodes through `getDynamicType()`, which threads
+  /// `appContext` in.
+  private var usesAppContext: Bool {
+    if parameters.contains(where: { fastDecodeAccessor(for: $0.type.trimmedDescription) == nil }) {
+      return true
+    }
+    if let returnType, fastDecodeAccessor(for: returnType) == nil {
+      return true
+    }
+    return false
   }
 }
 

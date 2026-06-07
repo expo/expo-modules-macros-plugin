@@ -103,10 +103,7 @@ struct ExpoModuleMacroTests {
 
           @JavaScriptActor
           public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
-            object.setProperty("greet") { [weak appContext, self] this, arguments in
-              guard let appContext else {
-                throw Exceptions.AppContextLost()
-              }
+            object.setProperty("greet") { [self] this, arguments in
               guard arguments.count == 1 else {
                 throw Exception(name: "InvalidArgumentCount", description: "Function 'greet' expects 1 argument(s), but got \\(arguments.count)")
               }
@@ -143,10 +140,7 @@ struct ExpoModuleMacroTests {
 
           @JavaScriptActor
           public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
-            object.setProperty("add") { [weak appContext, self] this, arguments in
-              guard let appContext else {
-                throw Exceptions.AppContextLost()
-              }
+            object.setProperty("add") { [self] this, arguments in
               guard arguments.count == 2 else {
                 throw Exception(name: "InvalidArgumentCount", description: "Function 'add' expects 2 argument(s), but got \\(arguments.count)")
               }
@@ -278,10 +272,7 @@ struct ExpoModuleMacroTests {
 
           @JavaScriptActor
           public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
-            object.setProperty("doReset") { [weak appContext, self] this, arguments in
-              guard let appContext else {
-                throw Exceptions.AppContextLost()
-              }
+            object.setProperty("doReset") { [self] this, arguments in
               guard arguments.count == 0 else {
                 throw Exception(name: "InvalidArgumentCount", description: "Function 'doReset' expects 0 argument(s), but got \\(arguments.count)")
               }
@@ -316,10 +307,7 @@ struct ExpoModuleMacroTests {
 
           @JavaScriptActor
           public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
-            object.setProperty("doWork") { [weak appContext, self] this, arguments in
-              guard let appContext else {
-                throw Exceptions.AppContextLost()
-              }
+            object.setProperty("doWork") { [self] this, arguments in
               guard arguments.count == 0 else {
                 throw Exception(name: "InvalidArgumentCount", description: "Function 'doWork' expects 0 argument(s), but got \\(arguments.count)")
               }
@@ -354,10 +342,7 @@ struct ExpoModuleMacroTests {
 
           @JavaScriptActor
           public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
-            object.setProperty("fetchValue") { [weak appContext, self] this, arguments in
-              guard let appContext else {
-                throw Exceptions.AppContextLost()
-              }
+            object.setProperty("fetchValue") { [self] this, arguments in
               guard arguments.count == 1 else {
                 throw Exception(name: "InvalidArgumentCount", description: "Function 'fetchValue' expects 1 argument(s), but got \\(arguments.count)")
               }
@@ -434,10 +419,7 @@ struct ExpoModuleMacroTests {
 
           @JavaScriptActor
           public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
-            object.setProperty("greet") { [weak appContext, self] this, arguments in
-              guard let appContext else {
-                throw Exceptions.AppContextLost()
-              }
+            object.setProperty("greet") { [self] this, arguments in
               guard arguments.count == 1 else {
                 throw Exception(name: "InvalidArgumentCount", description: "Function 'greet' expects 1 argument(s), but got \\(arguments.count)")
               }
@@ -473,10 +455,7 @@ struct ExpoModuleMacroTests {
 
           @JavaScriptActor
           public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
-            object.setProperty("compute") { [weak appContext, self] this, arguments in
-              guard let appContext else {
-                throw Exceptions.AppContextLost()
-              }
+            object.setProperty("compute") { [self] this, arguments in
               guard arguments.count == 0 else {
                 throw Exception(name: "InvalidArgumentCount", description: "Function 'compute' expects 0 argument(s), but got \\(arguments.count)")
               }
