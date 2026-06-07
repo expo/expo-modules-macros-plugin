@@ -116,6 +116,99 @@ struct RecordMacroTests {
   }
 
   @Test
+  func `Non-primitive properties are checked in a single conformance-assertion peer`() {
+    assertExpansion(
+      """
+      @Record
+      struct Options {
+        var primary: MyRecord
+        var tags: [String]
+        var count: Int = 0
+      }
+      """,
+      expandedSource: """
+        struct Options {
+          var primary: MyRecord
+          var tags: [String]
+          var count: Int = 0
+
+          private func _assertTypesConformance() {
+            func primary<T: AnyArgument>(_: T.Type) {
+            }
+            primary(MyRecord.self)
+            func tags<T: AnyArgument>(_: T.Type) {
+            }
+            tags([String].self)
+          }
+
+          public init() {
+            fatalError("\\(Self.self) has required properties and cannot be created with init(); construct it through the @Record-synthesized from(dictionary:) or from(object:) factories")
+          }
+
+          public init(primary: MyRecord, tags: [String], count: Int) {
+            self.primary = primary
+            self.tags = tags
+            self.count = count
+          }
+
+          @JavaScriptActor
+          public static func from(object: borrowing JavaScriptObject, appContext: AppContext) throws -> Self {
+            let primaryJSValue = object.getProperty("primary")
+            guard !primaryJSValue.isUndefined() else {
+              throw RecordPropertyRequiredException("primary")
+            }
+            let primary = try MyRecord.getDynamicType().cast(jsValue: primaryJSValue, appContext: appContext) as! MyRecord
+            let tagsJSValue = object.getProperty("tags")
+            guard !tagsJSValue.isUndefined() else {
+              throw RecordPropertyRequiredException("tags")
+            }
+            let tags = try [String].getDynamicType().cast(jsValue: tagsJSValue, appContext: appContext) as! [String]
+            let countJSValue = object.getProperty("count")
+            let count = countJSValue.isUndefined() ? 0 : try Int.getDynamicType().cast(jsValue: countJSValue, appContext: appContext) as! Int
+            return Self(primary: primary, tags: tags, count: count)
+          }
+
+          public static func from(dictionary: [String: Any], appContext: AppContext) throws -> Self {
+            let primaryValue = dictionary["primary"]
+            guard let primaryValue else {
+              throw RecordPropertyRequiredException("primary")
+            }
+            let primary = try MyRecord.getDynamicType().cast(primaryValue, appContext: appContext) as! MyRecord
+            let tagsValue = dictionary["tags"]
+            guard let tagsValue else {
+              throw RecordPropertyRequiredException("tags")
+            }
+            let tags = try [String].getDynamicType().cast(tagsValue, appContext: appContext) as! [String]
+            let countValue = dictionary["count"]
+            let count = countValue == nil ? 0 : try Int.getDynamicType().cast(countValue, appContext: appContext) as! Int
+            return Self(primary: primary, tags: tags, count: count)
+          }
+
+          public func toDictionary(appContext: AppContext? = nil) -> [String: Any] {
+            var dictionary: [String: Any] = [:]
+            dictionary["primary"] = self.primary
+            dictionary["tags"] = self.tags
+            dictionary["count"] = self.count
+            return dictionary
+          }
+
+          @JavaScriptActor
+          public func toObject(appContext: AppContext) throws -> JavaScriptObject {
+            let object = try appContext.runtime.createObject()
+            object.setProperty("primary", value: try MyRecord.getDynamicType().convertToJS(self.primary, appContext: appContext))
+            object.setProperty("tags", value: try [String].getDynamicType().convertToJS(self.tags, appContext: appContext))
+            object.setProperty("count", value: try Int.getDynamicType().convertToJS(self.count, appContext: appContext))
+            return object
+          }
+        }
+
+        extension Options: Record {
+        }
+        """
+    )
+  }
+
+  @Test
   func `Property types are inferred from scalar literal defaults when the annotation is omitted`() {
     assertExpansion(
       """

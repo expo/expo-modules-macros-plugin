@@ -155,6 +155,39 @@ struct SharedObjectMacroTests {
   }
 
   @Test
+  func `An optional property type is unwrapped to its core type in the assertion`() {
+    assertExpansion(
+      """
+      @SharedObject
+      final class Cache: SharedObject {
+        @JS
+        var owner: SomeType!
+      }
+      """,
+      expandedSource: """
+        final class Cache: SharedObject {
+          @JavaScriptActor
+          var owner: SomeType!
+
+          private func _assertTypesConformance_owner() {
+            func owner<T: AnyArgument>(_: T.Type) {
+            }
+            owner(SomeType.self)
+          }
+
+          public static func _synthesizedClassDefinition() -> ClassDefinition {
+            return Class("Cache", Cache.self) {
+              Property("owner") { (this: Cache) in
+                this.owner
+              }
+            }
+          }
+        }
+        """
+    )
+  }
+
+  @Test
   func `Property emits a class-scope Property entry that takes the owner`() {
     assertExpansion(
       """
