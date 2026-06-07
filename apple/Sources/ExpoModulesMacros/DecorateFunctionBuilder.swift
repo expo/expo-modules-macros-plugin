@@ -116,17 +116,18 @@ internal struct JSFunction {
   /// body never references `appContext`, so the capture and guard are omitted to avoid the
   /// unused-capture warning.
   var decorateStatements: String {
-    let captureList = usesAppContext ? "[weak appContext, self]" : "[self]"
-    let guardClause = usesAppContext
-      ? """
-
-          guard let appContext else {
-            throw Exceptions.AppContextLost()
+    if usesAppContext {
+      return """
+          object.setProperty("\(jsName)") { [weak appContext, self] this, arguments in
+            guard let appContext else {
+              throw Exceptions.AppContextLost()
+            }
+        \(bodyStatements(indent: "    "))
           }
-      """
-      : ""
+        """
+    }
     return """
-        object.setProperty("\(jsName)") { \(captureList) this, arguments in\(guardClause)
+        object.setProperty("\(jsName)") { [self] this, arguments in
       \(bodyStatements(indent: "    "))
         }
       """
