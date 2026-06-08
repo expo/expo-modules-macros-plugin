@@ -256,3 +256,76 @@ internal func expressionType(_ type: String) -> String {
   }
   return type.dropLast() + "?"
 }
+
+// MARK: - @JS property collection
+
+/// Collects the `@JS var` bindings of a declaration into `JSProperty` values for direct JSI binding.
+/// Shared between `@ExpoModule` and `@SharedObject` — the resulting properties are receiver-agnostic;
+/// the decorator that emits them picks the receiver (module `self` vs. shared-object `_self`).
+internal func collectProperties(
+  varDecl: VariableDeclSyntax,
+  attribute: AttributeSyntax
+) -> [JSProperty] {
+  let jsNameOverride = jsNameArgument(of: attribute)
+  // A `let` is never settable; only `var` bindings can carry a setter.
+  let isVar = varDecl.bindingSpecifier.tokenKind == .keyword(.var)
+
+  return varDecl.bindings.compactMap { binding in
+    guard let ident = binding.pattern.as(IdentifierPatternSyntax.self) else {
+      return nil
+    }
+    let swiftName = ident.identifier.text
+    // Prefer the explicit annotation; recover the type from a literal default (`var x = false`)
+    // when there's none. `nil` falls back to inference at the use site.
+    let valueType = binding.typeAnnotation?.type.trimmedDescription
+      ?? binding.initializer.flatMap { inferredLiteralType(of: $0.value) }
+    return JSProperty(
+      swiftName: swiftName,
+      jsName: jsNameOverride ?? swiftName,
+      valueType: valueType,
+      isSettable: isVar && bindingIsSettable(binding)
+    )
+  }
+}
+
+/// Whether a `var` binding is settable from JS. A stored property (no accessor block) is settable;
+/// a computed property is settable only when it declares an explicit `set` accessor. A getter-only
+/// computed property (`{ get }` or a single getter body) stays read-only. `willSet`/`didSet`
+/// observers imply stored storage, which is also settable.
+private func bindingIsSettable(_ binding: PatternBindingSyntax) -> Bool {
+  guard let accessorBlock = binding.accessorBlock else {
+    return true
+  }
+  switch accessorBlock.accessors {
+  case .accessors(let accessors):
+    return accessors.contains { accessor in
+      switch accessor.accessorSpecifier.tokenKind {
+      case .keyword(.set), .keyword(.willSet), .keyword(.didSet):
+        return true
+      default:
+        return false
+      }
+    }
+  case .getter:
+    return false
+  }
+}
+
+/// The throwing `JavaScriptUnownedValue` accessor that decodes the given primitive type directly
+/// (`asDouble()` for `Double`, etc.), bypassing the dynamic-type converter. Returns `nil` for types
+/// without a dedicated accessor (arrays, records, optionals, shared objects, other numeric widths),
+/// which decode through `getDynamicType().cast(...)`.
+func fastDecodeAccessor(for type: String) -> String? {
+  switch type {
+  case "Bool":
+    return "asBool"
+  case "Int":
+    return "asInt"
+  case "Double":
+    return "asDouble"
+  case "String":
+    return "asString"
+  default:
+    return nil
+  }
+}
