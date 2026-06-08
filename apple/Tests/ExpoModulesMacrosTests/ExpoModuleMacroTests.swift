@@ -357,7 +357,7 @@ struct ExpoModuleMacroTests {
   }
 
   @Test
-  func `Property generates a Property entry that reads self.<name>`() {
+  func `Getter-only property binds a get-only accessor via defineProperty`() {
     assertExpansion(
       """
       @ExpoModule
@@ -373,11 +373,108 @@ struct ExpoModuleMacroTests {
 
           public func _synthesizedDefinition() -> [AnyDefinition] {
             return [
-              Name("MyModule"),
-              Property("status") {
-                self.status
-              }
+              Name("MyModule")
             ]
+          }
+
+          @JavaScriptActor
+          public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
+            let statusDescriptor = runtime.createObject()
+            statusDescriptor.setProperty("enumerable", value: true)
+            statusDescriptor.setProperty("get") { [self] this, arguments in
+              return self.status.toJavaScriptValue(in: runtime)
+            }
+            object.defineProperty("status", descriptor: statusDescriptor)
+          }
+        }
+        """
+    )
+  }
+
+  @Test
+  func `Settable stored property binds both a getter and a setter`() {
+    assertExpansion(
+      """
+      @ExpoModule
+      final class MyModule: Module {
+        @JS
+        var ready: Bool = false
+      }
+      """,
+      expandedSource: """
+        final class MyModule: Module {
+          @JavaScriptActor
+          var ready: Bool = false
+
+          public func _synthesizedDefinition() -> [AnyDefinition] {
+            return [
+              Name("MyModule")
+            ]
+          }
+
+          @JavaScriptActor
+          public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
+            let readyDescriptor = runtime.createObject()
+            readyDescriptor.setProperty("enumerable", value: true)
+            readyDescriptor.setProperty("get") { [self] this, arguments in
+              return self.ready.toJavaScriptValue(in: runtime)
+            }
+            readyDescriptor.setProperty("set") { [self] this, arguments in
+              self.ready = try arguments.unownedValue(at: 0).asBool()
+              return .undefined
+            }
+            object.defineProperty("ready", descriptor: readyDescriptor)
+          }
+        }
+        """
+    )
+  }
+
+  @Test
+  func `Non-primitive property captures appContext and routes through the dynamic converter`() {
+    assertExpansion(
+      """
+      @ExpoModule
+      final class MyModule: Module {
+        @JS
+        var config: MyRecord
+      }
+      """,
+      expandedSource: """
+        final class MyModule: Module {
+          @JavaScriptActor
+          var config: MyRecord
+
+          private func _assertTypesConformance_config() {
+            func config<T: AnyArgument>(_: T.Type) {
+            }
+            config(MyRecord.self)
+          }
+
+          public func _synthesizedDefinition() -> [AnyDefinition] {
+            return [
+              Name("MyModule")
+            ]
+          }
+
+          @JavaScriptActor
+          public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
+            let configDescriptor = runtime.createObject()
+            configDescriptor.setProperty("enumerable", value: true)
+            configDescriptor.setProperty("get") { [weak appContext, self] this, arguments in
+              guard let appContext else {
+                throw Exceptions.AppContextLost()
+              }
+              return try MyRecord.getDynamicType().castToJS(self.config, appContext: appContext, in: runtime)
+            }
+            configDescriptor.setProperty("set") { [weak appContext, self] this, arguments in
+              guard let appContext else {
+                throw Exceptions.AppContextLost()
+              }
+              self.config = try MyRecord.getDynamicType().cast(jsValue: arguments[0], appContext: appContext) as! MyRecord
+              return .undefined
+            }
+            object.defineProperty("config", descriptor: configDescriptor)
           }
         }
         """
@@ -410,10 +507,7 @@ struct ExpoModuleMacroTests {
 
           public func _synthesizedDefinition() -> [AnyDefinition] {
             return [
-              Name("MyModule"),
-              Property("status") {
-                self.status
-              }
+              Name("MyModule")
             ]
           }
 
@@ -427,6 +521,12 @@ struct ExpoModuleMacroTests {
               let result = self.greet(name: arg0)
               return result.toJavaScriptValue(in: runtime)
             }
+            let statusDescriptor = runtime.createObject()
+            statusDescriptor.setProperty("enumerable", value: true)
+            statusDescriptor.setProperty("get") { [self] this, arguments in
+              return self.status.toJavaScriptValue(in: runtime)
+            }
+            object.defineProperty("status", descriptor: statusDescriptor)
           }
         }
         """
