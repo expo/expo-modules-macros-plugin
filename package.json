@@ -1,6 +1,6 @@
 {
   "name": "@expo/expo-modules-macros-plugin",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Swift macro plugin for Expo modules",
   "license": "MIT",
   "author": "650 Industries, Inc.",
