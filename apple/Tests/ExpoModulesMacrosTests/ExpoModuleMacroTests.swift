@@ -7,6 +7,7 @@ import Testing
 
 private let macroSpecs: [String: MacroSpec] = [
   "JS": MacroSpec(type: JSMacro.self),
+  "Event": MacroSpec(type: EventMacro.self),
   "ExpoModule": MacroSpec(type: ExpoModuleMacro.self, conformances: ["AnyModule"]),
 ]
 
@@ -562,6 +563,59 @@ struct ExpoModuleMacroTests {
               let result = self.compute()
               return result.toJavaScriptValue(in: runtime)
             }
+          }
+        }
+        """
+    )
+  }
+
+  @Test
+  func `Sync @Event member is stamped with @JavaScriptActor while the async default is not`() {
+    assertExpansion(
+      """
+      @ExpoModule
+      final class MyModule: Module {
+        @Event(sync: true)
+        var onTick: () -> Void
+
+        @Event
+        var onReady: () -> Void
+      }
+      """,
+      expandedSource: """
+        final class MyModule: Module {
+          @JavaScriptActor
+          var onTick: () -> Void {
+            get {
+              { [weak self] in
+                self?.emitSync(event: "tick")
+              }
+            }
+          }
+
+          private func _assertTypesConformance_onTick() {
+            func onTick<E: EventEmitter>(_: E.Type) {
+            }
+            onTick(MyModule.self)
+          }
+          var onReady: () -> Void {
+            get {
+              { [weak self] in
+                self?.emit(event: "ready")
+              }
+            }
+          }
+
+          private func _assertTypesConformance_onReady() {
+            func onReady<E: EventEmitter>(_: E.Type) {
+            }
+            onReady(MyModule.self)
+          }
+
+          public func _synthesizedDefinition() -> [AnyDefinition] {
+            return [
+              Name("MyModule")
+            ]
           }
         }
         """

@@ -6,6 +6,7 @@ struct ExpoModulesMacrosPlugin: CompilerPlugin {
   let providingMacros: [Macro.Type] = [
     OptimizedFunctionAttachedMacro.self,
     JSMacro.self,
+    EventMacro.self,
     ExpoModuleMacro.self,
     SharedObjectMacro.self,
     RecordMacro.self,

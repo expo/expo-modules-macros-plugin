@@ -15,6 +15,38 @@ internal func jsNameArgument(of attribute: AttributeSyntax) -> String? {
 }
 
 /**
+ Reads a labeled boolean-literal argument of an attribute, e.g. `@Event(sync: true)` -> true.
+ Returns nil if the attribute has no argument with that label or its value isn't a boolean literal.
+ */
+internal func boolArgument(of attribute: AttributeSyntax, label: String) -> Bool? {
+  guard let args = attribute.arguments?.as(LabeledExprListSyntax.self) else {
+    return nil
+  }
+  for arg in args where arg.label?.text == label {
+    guard let literal = arg.expression.as(BooleanLiteralExprSyntax.self) else {
+      return nil
+    }
+    return literal.literal.tokenKind == .keyword(.true)
+  }
+  return nil
+}
+
+/**
+ True if the declaration is a `@Event(sync: true)` property. A sync event dispatches inline on the
+ JS thread instead of scheduling, so `@ExpoModule`/`@SharedObject` stamp it with `@JavaScriptActor`,
+ making "must be called on the JS thread" a compile-time guarantee at the call site. Async events
+ (the default) are deliberately not stamped: their `emit` schedules onto the JS thread itself, so
+ they stay callable from any thread.
+ */
+internal func isSyncEventMember(_ decl: DeclSyntaxProtocol) -> Bool {
+  guard let varDecl = decl.as(VariableDeclSyntax.self),
+    let attribute = varDecl.attributes.firstAttribute(named: "Event") else {
+    return false
+  }
+  return boolArgument(of: attribute, label: "sync") == true
+}
+
+/**
  Reads a labeled array-literal argument of an attribute, e.g. `@ExpoModule(classes: [Foo.self, Bar.self])`,
  and returns the type names referenced (e.g. `["Foo", "Bar"]`). Each element must be a
  `<TypeName>.self` member-access expression; non-conforming elements are skipped silently.
