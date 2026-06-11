@@ -43,6 +43,38 @@ API **for AI coding agents** — and, increasingly, that's a first-class design 
 The same properties that help agents (ordinary Swift, one obvious place for types,
 fewer special concepts) help humans too — this isn't an agent-only optimization.
 
+## Prior art: JavaScriptKit / BridgeJS
+
+SwiftWasm's [JavaScriptKit](https://github.com/swiftwasm/JavaScriptKit) (its **BridgeJS**
+interop) is shipping macro-based Swift↔JS bridging, and independently lands on most of the
+same decisions — strong validation of this direction:
+
+- **`@JS` macro-based export** of Swift types/functions to JS, replacing hand-written glue
+  — the same thesis as this proposal.
+- **`@JS struct` = value/copy semantics** (reconstructed as a plain JS object, no shared
+  state); **`@JS class` = reference semantics** (shared across the boundary). Matches our
+  `@Record` (value) vs `@SharedObject` (reference) split.
+- **Instance fields auto-exported, no per-field annotation**; **static** members need an
+  explicit marker. Matches our fields-by-default ([`@Record`](#record)) and `static`
+  differentiator ([static vs. instance](#static-vs-instance-members)).
+- **Optionals → `T | null`**, nested structs nest, `JSObject` fields allowed; **no
+  generics / conformances / property observers**. Mirrors our requiredness/nullability
+  rules.
+- **Generates TypeScript `.d.ts`** from the annotated source — exactly
+  [Phase 3](#phase-3--typescript-type-generation).
+- Struct `init` → a **static `init` method**; class `init` → a JS **`new` constructor** —
+  the same instance-vs-static / prototype-vs-constructor distinction we draw.
+
+**Where it differs (deliberately):** JavaScriptKit uses **one `@JS` attribute for
+everything** (struct, class, enum, func, property). We split it — `@JS` for *members*,
+`@Record`/`@Union`/`@ViewProps`/`@ExpoView` for *types* — because those map onto
+**existing `expo-modules-core` concepts** (`Module`, `Record`, `SharedObject`, views) with
+distinct runtime registration and lifetimes. JavaScriptKit targets a flatter, pure-Swift-
+Wasm world (Swift *is* the whole program), where a single `@JS` fits; we layer onto a host
+runtime with a pre-existing type taxonomy. (This is also the backdrop for the open
+question of whether `@JS struct`/`@JS enum` should be an error redirecting to
+`@Record`/`@Union`, or accepted as a JavaScriptKit-familiar alias — see open questions.)
+
 ## Phases
 
 1. **[DSL coverage](#phase-1--dsl-coverage)** — macros that cover the existing API
@@ -1143,6 +1175,12 @@ before committing); each new impl struct → add to `providingMacros` in `Plugin
 6. **Phase 3 front end** — `expo-type-information` already parses Swift modules (via
    SourceKitten) and emits TS; phase 3 adapts it to the new attributes. Open: keep
    SourceKitten or move to SwiftSyntax for consistency with the macro toolchain.
+7. **`@JS struct` / `@JS enum`** — `@JS` is member-only today (funcs/properties/inits); a
+   nested `struct`/`enum` is a silent no-op. Either **error and redirect** to
+   `@Record`/`@Union`, or **accept as an alias** for them (the JavaScriptKit-familiar
+   spelling — see [Prior art](#prior-art-javascriptkit--bridgejs)). Leaning toward the
+   redirect, since our type attributes track distinct core concepts; revisit if the
+   JavaScriptKit muscle-memory argument wins.
 
 Resolved: events → typed payloads (`AnyArgument`), no `EventDispatcher`; view events
 fold into `@ViewProps` function-typed fields; **module & shared-object events are a
