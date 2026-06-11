@@ -245,6 +245,64 @@ struct EventMacroTests {
   }
 
   @Test
+  func `Module-qualified Swift.Void return is accepted`() {
+    assertExpansion(
+      """
+      class MyModule: Module {
+        @Event
+        var onReady: () -> Swift.Void
+      }
+      """,
+      expandedSource: """
+        class MyModule: Module {
+          var onReady: () -> Swift.Void {
+            get {
+              { [weak self] in
+                self?.emit(event: "ready")
+              }
+            }
+          }
+
+          private func _assertTypesConformance_onReady() {
+            func onReady<E: EventEmitter>(_: E.Type) {
+            }
+            onReady(MyModule.self)
+          }
+        }
+        """
+    )
+  }
+
+  @Test
+  func `Parenthesized Void return is accepted`() {
+    assertExpansion(
+      """
+      class MyModule: Module {
+        @Event
+        var onReady: () -> (Void)
+      }
+      """,
+      expandedSource: """
+        class MyModule: Module {
+          var onReady: () -> (Void) {
+            get {
+              { [weak self] in
+                self?.emit(event: "ready")
+              }
+            }
+          }
+
+          private func _assertTypesConformance_onReady() {
+            func onReady<E: EventEmitter>(_: E.Type) {
+            }
+            onReady(MyModule.self)
+          }
+        }
+        """
+    )
+  }
+
+  @Test
   func `Sync event dispatches through emitSync`() {
     assertExpansion(
       """

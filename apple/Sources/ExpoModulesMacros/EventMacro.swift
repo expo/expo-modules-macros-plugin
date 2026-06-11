@@ -34,8 +34,10 @@ import SwiftSyntaxMacros
 ///
 /// `@Event(sync: true)` opts into **synchronous dispatch**: the closure calls `emitSync` (inline
 /// conversion + dispatch, no scheduling) instead of `emit`, and `@ExpoModule`/`@SharedObject` stamp
-/// the member `@JavaScriptActor` so the compiler forces the call site onto the JS thread — the
-/// inverse of the async default.
+/// the member `@JavaScriptActor` so the compiler forces the call site onto the JS thread, the
+/// inverse of the async default. The isolation is on the property access, so it guards the inline
+/// `self.onTick(…)` usage; a closure stored or handed off escapes it, after which `emitSync` runs
+/// wherever the caller invokes it.
 ///
 /// As a **peer**, the macro emits a never-called conformance assertion (see
 /// `TypeConformanceAssertion.swift`) checking that the payload type is JS-convertible and that the
@@ -263,8 +265,9 @@ private struct EventFixItMessage: FixItMessage {
 /// The spelled name of the innermost type declaration enclosing the macro, read from the lexical
 /// context, so the emitter assertion can name the user's type in the conformance diagnostic
 /// ("requires that 'MyModule' conform to 'EventEmitter'" instead of "'Self'"). Returns `nil` (the
-/// caller falls back to `Self`) when there's no enclosing type, or when it's generic: `Foo.self`
-/// isn't valid for an unbound generic, while `Self` works anywhere.
+/// caller falls back to `Self`) when there's no enclosing type, or when it's a generic type
+/// declaration: `Foo.self` isn't valid for an unbound generic, while `Self` works anywhere. An
+/// extension can't be detected as generic syntactically (see the extension case below).
 private func enclosingTypeName(in context: some MacroExpansionContext) -> String? {
   for scope in context.lexicalContext {
     if let classDecl = scope.as(ClassDeclSyntax.self) {
@@ -277,6 +280,13 @@ private func enclosingTypeName(in context: some MacroExpansionContext) -> String
       return actorDecl.genericParameterClause == nil ? actorDecl.name.text : nil
     }
     if let extensionDecl = scope.as(ExtensionDeclSyntax.self) {
+      // An extension carries no generic-parameter clause of its own, so a bare extended type
+      // (`extension Box`) is indistinguishable from a non-generic one (`extension Foo`); both read
+      // as a plain identifier here. A written bound form (`extension Box<Int>`) is valid as `.self`,
+      // and the common non-generic case keeps its spelled name in the diagnostic. The unguarded gap
+      // is `extension <Generic>` with the parameters omitted, where the spelled name is an unbound
+      // generic invalid as `.self`; events on generic types in an extension are rare enough that the
+      // resulting compile error is an acceptable price for naming the user's type everywhere else.
       return extensionDecl.extendedType.trimmedDescription
     }
   }
@@ -306,8 +316,15 @@ private func underlyingFunctionType(of type: TypeSyntax?) -> FunctionTypeSyntax?
 }
 
 /// True when the function type's return is written as `Void` / `()`. Function types always carry an
-/// explicit return clause, so unlike a function declaration there's no "absent" case.
+/// explicit return clause, so unlike a function declaration there's no "absent" case. A module-qualified
+/// `Swift.Void` and redundant parentheses (`(Void)`, `(())`) are accepted too, so a valid void return
+/// written one of those ways isn't rejected with a misleading "must return 'Void'" diagnostic.
 private func isVoidReturn(_ type: TypeSyntax) -> Bool {
+  // Peel single-element, unlabeled parentheses: `(Void)` and `(())` are the same type as their content.
+  if let tuple = type.as(TupleTypeSyntax.self), tuple.elements.count == 1,
+    let element = tuple.elements.first, element.firstName == nil {
+    return isVoidReturn(element.type)
+  }
   let text = type.trimmedDescription
-  return text == "Void" || text == "()"
+  return text == "Void" || text == "()" || text == "Swift.Void"
 }
