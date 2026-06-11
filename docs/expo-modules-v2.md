@@ -2,7 +2,7 @@
 
 - **Status:** Draft for review (signatures verified against `expo/main` core)
 - **Author:** Tomasz Sapeta
-- **Created:** 2026-05-31 · **Updated:** 2026-06-02
+- **Created:** 2026-05-31 · **Updated:** 2026-06-07
 - **Scope:** Apple/Swift macros in this repo (`apple/Sources/ExpoModulesMacros`)
 
 ## Goal
@@ -11,6 +11,37 @@ Use Swift macros to make authoring Expo modules and views simpler, faster, and
 type-safe end to end — an author writes ordinary Swift (`@JS` members, a typed props
 object, typed events) and the toolchain takes care of the rest. The work is staged
 in three phases:
+
+## Why macros over the DSL (incl. AI-agent ergonomics)
+
+Beyond performance and type-safety, the macro surface is a markedly better authoring
+API **for AI coding agents** — and, increasingly, that's a first-class design criterion.
+
+- **It's ordinary Swift.** `@ExpoModule class { @JS func add(a: Double, b: Double) ->
+  Double }` is "an annotated class," a shape agents model well from training data
+  (`@Published`, `@objc`, decorators, Java annotations). The DSL — `Function("add") {
+  (a: Double, b: Double) in … }`, `.get/.set` chaining, `Events("…")` — is a bespoke
+  result-builder grammar an agent must recall *Expo-specifically*, with more room to
+  invent a signature that doesn't exist.
+- **Signature is the contract; the type checker enforces it.** With `@JS func add(…) ->
+  Double` there's one obvious place for types and Swift verifies it. The DSL splits the
+  contract (closure param types must be spelled out *and* `AnyArgument`-convertible) and
+  surfaces mistakes as hard-to-diagnose result-builder/closure-inference errors.
+- **Fewer Expo-specific concepts to get right.** Macros fold `Function`/`AsyncFunction`
+  into the `async` keyword, `Property().get.set` into a normal `var`, the `Events("…")`
+  string list + `sendEvent("…")` into one typed `@Event` property — each collapsed
+  concept is one less thing to misremember or desync.
+- **Lower token cost over a session.** Per module the macro form is a bit more compact,
+  but the dominant lever is **fewer error→re-read→fix round-trips**: precise,
+  type-checked failures cost far less than debugging result-builder errors. Phase 3
+  compounds this — generated `.d.ts` means the *JS-side* code an agent writes is typed
+  too.
+- **Caveat (transient):** today the DSL is the better-known surface simply because it's
+  documented and in training data; the v2 macros aren't shipped yet. That edge flips
+  once the macros ship and are documented.
+
+The same properties that help agents (ordinary Swift, one obvious place for types,
+fewer special concepts) help humans too — this isn't an agent-only optimization.
 
 ## Phases
 
@@ -97,8 +128,18 @@ Arguments:
 
 #### Property getter + setter
 
-Extend the property-entry builder to emit `.set` for a settable stored/computed
-var; getter-only (`{ get }` or `let`) stays as today.
+> **Implemented (PR #14): `@JS var` binds directly via `defineProperty`, not the DSL.** The
+> originally-planned approach below — emit a DSL `Property("ready") { … }.set { … }` entry — was
+> skipped. `@ExpoModule` instead binds each `@JS var` straight into the module's JS object inside
+> `_decorateModule` (the phase-2 direct-JSI form), so properties never go through `Property(...)`. A
+> get/set accessor is installed with `object.defineProperty(name, descriptor:)`; see
+> [the phase-2 sketch](#example-a-sync-function). Settability is syntactic — a stored `var`, or a
+> computed `var` with an explicit `set` (or `willSet`/`didSet`), gets a setter; getter-only computed
+> vars and `let` stay read-only. Swift access modifiers (`private`, `private(set)`) don't gate JS
+> exposure: the synthesized accessor lives inside the type, so it reads/writes those members fine.
+
+The original DSL plan, for reference (not built): extend the property-entry builder to emit `.set`
+for a settable stored/computed var; getter-only (`{ get }` or `let`) stays as today.
 
 ```swift
 Property("ready") { self.ready }.set { (newValue: Bool) in self.ready = newValue }
@@ -194,7 +235,7 @@ JS; expands to nothing on its own. `@ExpoModule` and `@SharedObject` discover
 ```swift
 @JS func greet(name: String) -> String { … }   // Function("greet", greet)
 @JS("doWork") func performWork() async throws {} // AsyncFunction("doWork", performWork)
-@JS var status: String { "ok" }                  // Property("status") { self.status }
+@JS var status: String { "ok" }                  // defineProperty get accessor (direct binding)
 ```
 
 The macro stamps `@JavaScriptActor` on `@JS` members (skipping `nonisolated` or members
@@ -271,16 +312,17 @@ DSL mapping: an instance function emits `Function("get", …)`; a static one emi
 already provides). In phase 2 (direct JSI binding), statics decorate the constructor and
 instance members the prototype — the same split, just done by the generated builder.
 
-**Binding names don't need a new sigil.** For a shared object, **all** `` `#…` ``
-bindings are `static func`s on the type (the decoration is class-level — see
-[Class-level decoration](#class-level-decoration-phase-2)) — they differ only in what the
-body does: an instance-member binding recovers the native receiver from JS `this`
-(`(~Cache.self).cast(jsValue: this, …)`), a static-member binding ignores `this` and calls
-the Swift `static` member (`Cache.open(…)`). So a JS instance member and a JS static member
-that share a name (`cache.get` vs `Cache.get`) are two distinct `static func \`#get\``
-*overloads-by-context* — but to keep their Swift names unambiguous, the static-member
-binding can carry a qualifier (e.g. `` `#static.get` ``), the same scheme used for property
-get/set (`` `#ready.get` ``). The single `#` sigil stays the only marker.
+**No named bindings — each member's body is inlined into its `setProperty` closure inside the
+decorate entry point** (the module's `_decorateModule`, see
+[the module sketch](#example-a-sync-function); a shared object uses a `static func
+_decorateSharedObject` class-level form). Instance vs. static is just *which JS object the
+closure decorates* and *how it reaches the receiver*: an **instance** member's closure decorates
+the **prototype** and recovers the native receiver from JS `this`
+(`Cache.getDynamicType().cast(jsValue: this, …)`); a **static** member's closure decorates the
+**constructor** and calls the Swift `static` member (`Cache.open(…)`) ignoring `this`. So a JS
+instance member and a JS static member that share a name (`cache.get` vs `Cache.get`) never
+clash — they're closures on different JS objects. The only generated *name* is the entry point
+itself.
 
 > **Static *properties* need core support.** Core has `StaticFunction` but **no
 > `StaticProperty`** today (class properties decorate an instance, not the prototype/
@@ -304,35 +346,36 @@ instance. This mirrors core's `ClassDefinition.decorate` (`ClassDefinition.swift
   `ClassDefinition.swift:97`. A stale comment two lines above says properties decorate an
   instance — the code below it puts them on the prototype.)
 
-So `@SharedObject` emits a **`static func _decorateJavaScriptClass(_ klass:…)`** that sets
-up the prototype + constructor once. The only genuinely per-instance work is core's
+So `@SharedObject` emits a **`static func _decorateSharedObject(…)`** (the class-level form, taking
+the constructor/prototype core supplies) that sets up the prototype + constructor once. The only genuinely per-instance work is core's
 internal native↔JS pairing (`sharedObjectId`, `SharedObjectRegistry.swift:114`), which the
 macro doesn't generate.
 
 **How an instance member reaches its receiver without `self`.** This is the key
-difference from modules. A shared-object binding is `static` — it has no `self` — so it
-recovers the native instance from JS **`this`**: every instance's JS object is paired with
-its native object in the `SharedObjectRegistry` at construction (`ClassDefinition.swift:68`),
-and `(~Cache.self).cast(jsValue: this, …)` resolves it back (core's `takesOwner` path →
-`DynamicSharedObjectType` → `sharedObjectRegistry.get(...).native`,
-`DynamicSharedObjectType.swift:41`). The receiver is a *resolved parameter*, not the
-binding's `self`:
+difference from modules. A shared object's `_decorateSharedObject` is a `static func` — it has no instance
+`self` — so each instance-member closure recovers the native instance from JS **`this`**: every
+instance's JS object is paired with its native object in the `SharedObjectRegistry` at
+construction (`ClassDefinition.swift:68`), and `Cache.getDynamicType().cast(jsValue: this, …)`
+resolves it back (core's `takesOwner` path → `DynamicSharedObjectType` →
+`sharedObjectRegistry.get(...).native`, `DynamicSharedObjectType.swift:41`). The receiver is a
+*resolved local*, not an instance `self`:
 
 ```swift
-// shared-object instance function `get` — static, receiver resolved from `this`
-static func `#get`(_ this: JavaScriptValue, _ arguments: borrowing JavaScriptValuesBuffer,
-                   appContext: AppContext, in runtime: JavaScriptRuntime) throws -> JavaScriptValue {
-  let owner = try (~Cache.self).cast(jsValue: this, appContext: appContext) as! Cache
-  let key   = try (~String.self).cast(jsValue: arguments[0], appContext: appContext) as! String
-  return try (~(String?).self).castToJS(owner.get(key), appContext: appContext, in: runtime)
+// shared-object instance function `get` — closure decorates the prototype, receiver from `this`
+prototype.setProperty("get") { [weak appContext, self] this, arguments in
+  guard let appContext else {
+    throw Exceptions.AppContextLost()
+  }
+  let owner = try Cache.getDynamicType().cast(jsValue: this, appContext: appContext) as! Cache
+  let key = try arguments[0].asString()
+  return try (String?).getDynamicType().castToJS(owner.get(key), appContext: appContext, in: runtime)
 }
 ```
 
-**Modules differ exactly here:** a module *is* a singleton instance, so its binding is an
-**instance method** using the real `self` (`self.add(…)`, the
-[sketch above](#example-a-sync-function)) and ignores `this`. So: module binding = instance
-method on real `self`; shared-object binding = `static`, receiver recovered from `this`.
-The decode/convert of the *other* arguments is identical in both.
+**Modules differ exactly here:** a module *is* a singleton instance, so its closures call the
+real `self` (`self.add(…)`, the [sketch above](#example-a-sync-function)) and ignore `this`. So:
+module closure = call on real `self`; shared-object instance closure = receiver recovered from
+`this`. The decode/encode of the *other* arguments is identical in both.
 
 **Events** use the same `@Event` function-typed property as modules
 ([Module events](#module-events)); the synthesized closure dispatches into
@@ -347,9 +390,9 @@ For full parity, `@SharedObject` should also gain **property setters** (as modul
 `@Record` on a `Record` type synthesizes `_recordFields(of:)` — compile-time
 field/key pairs that replace the runtime `Mirror` walk in `fieldsOf(_:)`.
 
-**All stored properties are fields by default** — `@Field` is no longer required to
-make a property a field. The macro can see every stored property at expansion time,
-so the common case needs no annotation:
+**Every stored property is a field. There is no `@Field` attribute.** The macro can
+see every stored property at expansion time, so no annotation is needed (and `@Field`
+is rejected with a diagnostic — it has no meaning under `@Record`):
 
 ```swift
 @Record
@@ -360,8 +403,8 @@ struct Options: Record {
 }
 ```
 
-**Requiredness is inferred from the declaration** (default value / optional type), so
-`@Field(.required)` is rarely needed:
+**Requiredness is inferred from the declaration** (default value / optional type) —
+there's nothing to configure:
 
 | Property | JS requiredness |
 |---|---|
@@ -369,25 +412,18 @@ struct Options: Record {
 | optional type (`var x: T?`) | **nullable** *and* optional — may be omitted or `null` |
 | non-optional, no default (`var x: T`) | **required** — must be provided |
 
-`@Field` still exists to **set options** — force `.required` on a defaulted/optional
-field, or remap the key:
-
 ```swift
 @Record
 struct Options: Record {
-  var name: String                               // required (no default, non-optional)
-  var count: Int = 0                              // optional (has default)
-  var note: String?                               // nullable + optional
-  @Field(.required) var token: String = ""        // force-required despite the default
-  @Field(.keyed("custom_key")) var flag: Bool = false  // custom JS key
+  var name: String       // required (no default, non-optional)
+  var count: Int = 0      // optional (has default)
+  var note: String?       // nullable + optional
 }
 ```
 
-Because the default flipped, **exclusion needs an explicit opt-out** (omitting
-`@Field` no longer excludes a property). Open: the opt-out spelling — an `@Ignore`
-attribute vs. a convention. Also: every stored property is now expected to be
-`AnyArgument`/convertible; a non-convertible stored property must be opted out or it's
-a diagnostic.
+Open: every stored property is expected to be `AnyArgument`/convertible; a
+non-convertible stored property is a diagnostic. (No opt-out: every stored property is
+a field. If a future need to exclude one arises, revisit — but `@Field` is not it.)
 
 `@Record`'s field synthesis is reused by `@ViewProps` for its value props — see
 [`@ViewProps` vs `@Record`](#viewprops-vs-record).
@@ -515,9 +551,9 @@ exposes only
 
 `@ViewProps` on a props **`struct`**. **Value stored properties are props;
 function-typed properties are events** (see [Events model](#events-model)). Like
-`@Record`, fields need no `@Field` annotation by default; `@Field` is only for
-options. One record ⇄ one TS type, callbacks included — exact native/TS symmetry. No
-`EventDispatcher`, no `@ViewEvent`.
+`@Record`, every stored property is a field — no `@Field` annotation. One record ⇄ one
+TS type, callbacks included — exact native/TS symmetry. No `EventDispatcher`, no
+`@ViewEvent`.
 
 ```swift
 @ViewProps
@@ -530,8 +566,7 @@ struct MyViewProps {
 }
 ```
 
-**Requiredness is inferred from the declaration** (so `@Field(.required)` is rarely
-needed — see [`@Record`](#record)):
+**Requiredness is inferred from the declaration** (see [`@Record`](#record)):
 
 | Property | JS requiredness |
 |---|---|
@@ -541,8 +576,7 @@ needed — see [`@Record`](#record)):
 
 "Optional" (key may be omitted) and "nullable" (value may be `null`) are independent: a
 property can be one, both, or neither. The rule maps to core's `isRequired` — a field is
-required only in the last row. `@Field(.required)` can still force-require a defaulted or
-optional property when an author wants that.
+required only in the last row.
 
 **Struct, for performance.** Props are decoded on every React update; a value type
 avoids per-update heap allocation + ARC churn and makes the `oldProps` vs `self.props`
@@ -697,75 +731,66 @@ Property("ready") { self.ready }.set { (newValue: Bool) in self.ready = newValue
 // + toTuple is the cost.
 ```
 
-**Phase 2** — the macro emits code that **builds the JS host function itself** with
-`runtime.createFunction` (from `expo-modules-jsi`) and assigns it to the module's /
-shared object's JS object, decoding each argument by its static type and calling the
-Swift function directly — no `[Any]`/`toTuple` assembled by a generic call path, no
-per-call definition walk. Illustrative expansion (the exact registration entry point is
-part of the [core contract](#core-dependencies)):
+**Phase 2** — the macro emits a single `_decorateModule` that **builds each JS host function itself**
+via the closure-taking `JavaScriptObject.setProperty(_:)` (which calls `runtime.createFunction`
+under the hood), with the decode-call-encode body **inlined into the closure**, decoding each
+argument by its static type and calling the Swift function directly — no `[Any]`/`toTuple`
+assembled by a generic call path, no per-call definition walk. Illustrative expansion (the exact
+registration entry point is part of the [core contract](#core-dependencies)):
 
 ```swift
-// One binding per @JS member. The binding IS the host-function body — it has the
-// createFunction closure signature (this, arguments) -> JavaScriptValue — rather than
-// wrapping it; `_decorateJavaScriptObject` does the createFunction call. Named with a backtick
-// raw identifier `#add` so it's unmistakably generated and never spelled by users (see
-// note). `self` is the native module instance; `this` is the JS owner; `arguments` is a
-// JavaScriptValuesBuffer. appContext/runtime are threaded in (no longer captured).
+// A single generated function decorates the JS object core hands it. This is what the runtime
+// calls instead of walking a DSL definition. Core supplies the target object — the module's JS
+// object, or a shared object's prototype/constructor; never a plain object the macro creates.
+// Mirrors core's `ObjectDefinition.decorate(object:)`. Named `_decorateModule` (the `_`-prefix
+// convention for synthesized members the runtime calls; the `ExpoModule` suffix names the macro
+// it came from). `self` is the native module instance; `this` is the JS owner; `arguments` is a
+// JavaScriptValuesBuffer.
 @JavaScriptActor
-private func `#add`(_ this: JavaScriptValue, _ arguments: borrowing JavaScriptValuesBuffer,
-                    appContext: AppContext, in runtime: JavaScriptRuntime) throws -> JavaScriptValue {
-  // 1. static arity check — count known at expansion time
-  guard arguments.count == 2 else { throw InvalidArgCount(expected: 2, got: arguments.count) }
-
-  // 2. per-argument decode, one cast per arg by its static type — no [Any] collection,
-  //    no toTuple. (For now via the existing dynamic-type converters; see note.)
-  let a = try (~Double.self).cast(jsValue: arguments[0], appContext: appContext) as! Double
-  let b = try (~Double.self).cast(jsValue: arguments[1], appContext: appContext) as! Double
-
-  // 3. call the Swift function directly, convert the typed result back to JS
-  let result: Double = self.add(a: a, b: b)
-  return try (~Double.self).castToJS(result, appContext: appContext, in: runtime)
-}
-
-// A settable property → a getter binding + a setter binding. A getter-only property
-// omits the setter. Same host-function-body shape as above.
-@JavaScriptActor
-private func `#ready.get`(_ this: JavaScriptValue, _ arguments: borrowing JavaScriptValuesBuffer,
-                          appContext: AppContext, in runtime: JavaScriptRuntime) throws -> JavaScriptValue {
-  return try (~Bool.self).castToJS(self.ready, appContext: appContext, in: runtime)
-}
-@JavaScriptActor
-private func `#ready.set`(_ this: JavaScriptValue, _ arguments: borrowing JavaScriptValuesBuffer,
-                          appContext: AppContext, in runtime: JavaScriptRuntime) throws -> JavaScriptValue {
-  self.ready = try (~Bool.self).cast(jsValue: arguments[0], appContext: appContext) as! Bool
-  return .undefined
-}
-
-// A single generated function decorates the JS object core hands it with every binding.
-// This is what the runtime calls instead of walking a DSL definition. Core supplies the
-// target object — the module's JS object, or a shared object's prototype/constructor;
-// never a plain object the macro creates. Mirrors core's `ObjectDefinition.decorate(object:)`.
-// The createFunction call lives here once; each binding is passed in as the closure body.
-@JavaScriptActor
-public func _decorateJavaScriptObject(_ object: borrowing JavaScriptObject,
-                                      appContext: AppContext, in runtime: JavaScriptRuntime) throws {
-  // function → a plain property holding the function
-  let add = runtime.createFunction("add") { [self] this, args in
-    try `#add`(this, args, appContext: appContext, in: runtime)
+public func _decorateModule(object: borrowing JavaScriptObject,
+                                in runtime: JavaScriptRuntime, appContext: AppContext) throws {
+  // function → the decode-call-encode body is inlined straight into the setProperty closure
+  // (the closure-taking overload creates the host function under the hood). No separate named
+  // binding — inlining tested as no slower, and it drops a whole naming/collision scheme.
+  // Capture mirrors core's `SyncFunctionDefinition.build`: `self` (the module) STRONG — the
+  // closure is what keeps the native callable alive while JS can invoke it, reclaimed by the JS
+  // VM's GC; `appContext` WEAK + guarded, so it isn't a real retain cycle.
+  object.setProperty("add") { [weak appContext, self] this, arguments in
+    guard let appContext else {
+      throw Exceptions.AppContextLost()
+    }
+    // 1. static arity check — count known at expansion time
+    guard arguments.count == 2 else {
+      throw Exception(name: "InvalidArgumentCount", description: "Function 'add' expects 2 argument(s), but got \(arguments.count)")
+    }
+    // 2. per-argument decode by static type — no [Any], no toTuple. Primitives use a direct
+    //    typed accessor (`asDouble()`, validating + throwing); other types fall back to
+    //    `T.getDynamicType().cast(...) as! T` (the public converter; `~` is internal to core).
+    let arg0 = try arguments[0].asDouble()
+    let arg1 = try arguments[1].asDouble()
+    // 3. call the Swift function directly, encode the typed result back to JS. Primitives use
+    //    `toJavaScriptValue(in:)`; other types use `T.getDynamicType().castToJS(...)`.
+    let result = self.add(a: arg0, b: arg1)
+    return result.toJavaScriptValue(in: runtime)
   }
-  object.setProperty("add", value: add.asObject())
 
-  // property → a get/set descriptor, installed with defineProperty
-  let descriptor = try runtime.createObject()
-  descriptor.setProperty("enumerable", value: true)
-  descriptor.setProperty("get", value: runtime.createFunction("ready") { [self] this, args in
-    try `#ready.get`(this, args, appContext: appContext, in: runtime)
-  })
-  descriptor.setProperty("set", value: runtime.createFunction("ready") { [self] this, args in   // omit for getter-only
-    try `#ready.set`(this, args, appContext: appContext, in: runtime)
-  })
-  object.defineProperty("ready", descriptor: descriptor)
-
+  // property → a get/set accessor installed with defineProperty (implemented, PR #14). The
+  // getter/setter bodies inline the same way a function's do, reading/writing `self.ready`. A
+  // descriptor object holds `enumerable` + `get` (+ `set` when settable), each a closure-taking
+  // `setProperty(_:)` host function — the same overload functions use — then
+  // `object.defineProperty("ready", descriptor:)` installs it. A getter-only property omits `set`.
+  let readyDescriptor = runtime.createObject()
+  readyDescriptor.setProperty("enumerable", value: true)
+  readyDescriptor.setProperty("get") { [weak appContext, self] this, arguments in
+    guard let appContext else { throw Exceptions.AppContextLost() }
+    return self.ready.toJavaScriptValue(in: runtime)
+  }
+  readyDescriptor.setProperty("set") { [weak appContext, self] this, arguments in
+    guard let appContext else { throw Exceptions.AppContextLost() }
+    self.ready = try arguments.unownedValue(at: 0).asBool()
+    return .undefined
+  }
+  object.defineProperty("ready", descriptor: readyDescriptor)
   // … one entry per @JS function / property / constructor / event …
 }
 ```
@@ -777,54 +802,52 @@ Notes:
   `SyncFunctionDefinition.build` uses today (`SyncFunctionDefinition.swift:129`). `this`
   is the JS owner; the native receiver is the macro's `self`, so the body calls
   `self.add(…)` directly.
-- Each `` `#…` `` binding **is the host-function body**, not a factory — it has the
-  `createFunction` closure shape `(this, arguments) throws -> JavaScriptValue`. The single
-  `runtime.createFunction(...)` call (and `.asObject()`) lives in `_decorateJavaScriptObject`,
-  which passes the binding as the closure. This keeps the per-member generated code to
-  just the decode-call-convert work, and avoids each binding capturing `self`/`appContext`
-  (they're plain method parameters / the implicit receiver).
-- **Properties** emit a getter binding (`` `#ready.get` ``) and, if settable, a setter
-  binding (`` `#ready.set` ``); the builder wraps each in `createFunction` and assembles a
-  JS **descriptor** (`enumerable` + `get`/`set` functions), installed with
-  `object.defineProperty(name, descriptor:)` — the same descriptor shape
-  `PropertyDefinition.buildDescriptor` uses today (`PropertyDefinition.swift:183`).
-  Getter-only properties (computed `{ get }` / `let`) omit the setter binding. The
-  getter/setter decode + result conversion uses the same per-type `(~T.self)` casts as
-  functions.
-- **First cut reuses the existing converters.** `(~A.self).cast(jsValue:appContext:)` is
-  the current per-type dynamic cast — it returns `Any`, so there's still a boxing + force
-  cast here. The win at this stage is structural: each argument is cast *individually by
-  its known type*, with no `[Any]` argument array and no `toTuple`. **Eliminating the
-  `Any` round-trip** (a converter that returns the concrete `A` directly) is the deeper
-  optimization, layered on later.
-- The converter is chosen at expansion by the static type, so `@Record`, `@Union`,
-  shared object, optional, etc. each get their own `(~T.self)` cast (the full
-  `AnyArgument` set).
-- **Async** (`@JS func … async`) wraps the same body in the JS `Promise` machinery and
-  runs on `@JavaScriptActor` (synchronous until the first suspension) — see
-  [`@JS` › Async functions](#async-functions).
+- **The body is inlined into the `setProperty` closure**, not a separate named function.
+  `_decorateModule` installs each `@JS func` via the closure-taking `JavaScriptObject.setProperty(_:)`
+  overload (which creates the host function under the hood), with the full decode-call-encode
+  body inlined into the closure. (An earlier design emitted a named `` `#name` `` host-function
+  body per member and forwarded to it; inlining tested as no slower and dropped a whole
+  naming/collision scheme, so the named bindings were removed.) The closure captures **`self`
+  strong** (the closure is what keeps the native callable alive while JS can invoke it, reclaimed
+  by the JS VM's GC) and **`appContext` weak + guarded** (`guard let appContext else { throw
+  Exceptions.AppContextLost() }`) — mirroring core's `SyncFunctionDefinition.build`
+  (`SyncFunctionDefinition.swift:129`).
+- **Primitive arguments/returns use a typed fast path; everything else falls back to the dynamic
+  converter.** For `Bool`/`Int`/`Double`/`String`, decode is a direct **`try arguments[i].asBool()`
+  / `asInt()` / `asDouble()` / `asString()`** (a validating `JavaScriptValue` accessor that throws
+  `TypeError` on mismatch) and encode is **`result.toJavaScriptValue(in: runtime)`** (the typed
+  `JavaScriptRepresentable` conversion). No `getDynamicType()` allocation, no `Any` boxing, no
+  force-cast. **Other types** (arrays, records, optionals, shared objects, other numeric widths)
+  fall back to **`T.getDynamicType().cast(jsValue:appContext:) as! T`** / `.castToJS(...)`. The
+  `~` prefix sugar is **`internal`** to core (`DynamicType.swift:34`) so generated consumer code
+  can't spell it; the public equivalent is **`T.getDynamicType()`** — a `public nonisolated static`
+  requirement on `AnyArgument` (`Arguments/AnyArgument.swift:9`) that `~` just wraps
+  (`AnyDynamicType.castToJS` is public, `AnyDynamicType.swift:74`). The fallback path still boxes
+  to `Any`; extending the typed fast path to more types is the remaining optimization.
+- **Measured (bare-expo BenchmarkingExpoModule, 100k calls):** `@JS` runs ~2.2× faster than the
+  DSL `Function` and lands within **1.04–1.23×** of `@OptimizedFunction` — e.g. `addStrings`
+  66.5 ms (`@JS`) vs 64.1 ms (`@OptimizedFunction`) vs 143 ms (`Function`); `nothing()` 26.6 vs
+  21.7 vs 58.4 ms. The realistic arg-marshaling cases (`addStrings`) are essentially tied with the
+  optimized path; the small fixed gap on `nothing()` is the per-call `guard let appContext`
+  weak-load that `@OptimizedFunction` skips. This validates the end state: once every synthesized
+  function is fast by default, `@OptimizedFunction` becomes redundant.
+- **Async** (`@JS func … async`) inlines an `async` body that `await`s `self.fn(...)`; the closure
+  being `async` is what selects the **async `setProperty(_:)` overload**, so JS receives a promise.
+  The decode-call-encode shape is otherwise identical to the sync case. Runs on `@JavaScriptActor`
+  (synchronous until the first suspension) — see [`@JS` › Async functions](#async-functions).
 - This sketch decorates a module's single JS object. A **shared object** uses a
-  `static func _decorateJavaScriptClass` instead — same per-member bindings, but applied
-  to the **constructor** (statics) and **prototype** (instance funcs + properties), once
+  `static func _decorateSharedObject` (a class-level form) instead — same inlined per-member closures, but
+  applied to the **constructor** (statics) and **prototype** (instance funcs + properties), once
   per class; receivers resolve from JS `this`. See
   [Class-level decoration](#class-level-decoration-phase-2).
-- **The bindings are never called by name** — only the generated `_decorateJavaScriptObject`
-  references them (it knows the full set, since the macro emits both in one expansion).
-  They're named with **backtick raw identifiers `` `#add` ``** (SE-0451), which makes them
-  visually unmistakable as generated and unspellable in ordinary code, and `private` so they
-  don't leak. `_decorateJavaScriptObject` keeps the existing leading-underscore convention
-  since the **runtime calls it**, and takes the target object core supplies (it doesn't
-  create one) — mirroring core's `ObjectDefinition.decorate(object:)`, including its
-  **`borrowing`** parameter: it mutates the object through its reference
-  (`setProperty`/`defineProperty`) without reassigning or taking ownership, so it borrows
-  rather than `inout` (no rebinding) or `consuming` (caller keeps using it).
-  Same convention core uses (`ObjectDefinition.swift:97`).
-- **Prerequisite: Swift 6.2.** Raw identifiers (`` `#…` ``) require Swift 6.2 **where the
-  generated code compiles — i.e. the consumer module**, not just the macro plugin (the
-  plugin is already on swift-tools 6.2). Core / consumer modules are currently
-  `swift_version 6.0`, so this binding style is gated on raising that floor. Until then the
-  fallback is a plain leading-underscore name (`_expoBind_add`), which has no version
-  requirement. Tracked in [Core dependencies](#core-dependencies).
+- **The decorate function is the only generated entry point** (`_decorateModule` for a module,
+  `_decorateSharedObject` for a shared object), `public` because the **runtime calls it** (the
+  `_`-prefix is the convention for runtime-called synthesized members; the macro-name suffix makes
+  its origin clear and reads naturally at core's call site). It takes the target object core supplies (it doesn't create one) — mirroring
+  core's `ObjectDefinition.decorate(object:)`, including its **`borrowing`** parameter: it mutates
+  the object through its reference (`setProperty`/`defineProperty`) without reassigning or taking
+  ownership, so it borrows rather than `inout` (no rebinding) or `consuming` (caller keeps using
+  it). Same convention core uses (`ObjectDefinition.swift:97`).
 
 ### Proof of concept: `@OptimizedFunction`
 
@@ -1049,11 +1072,13 @@ dict-based `sendEvent(_:_: [String: Any?])`). Add the same typed `emit` to `Base
 so module and shared-object events share one mechanism and accept any `AnyArgument`
 payload. (See [Module events](#module-events).)
 
-**5. Swift 6.2 floor (for phase-2 binding names).** The phase-2 bindings use backtick
-raw identifiers (`` `#add` ``, SE-0451), which require **Swift 6.2 in the consumer module**
-where the generated code compiles. Core / consumer modules are `swift_version 6.0` today,
-so this is gated on raising that floor (the macro plugin is already on 6.2). Fallback
-until then: leading-underscore binding names (`_expoBind_…`), no version requirement.
+**5. No special toolchain/language-mode requirement.** The generated code uses only plain
+identifiers (`_decorateModule`, `argN`) — no raw identifiers — so there's no
+`swift_version`/floor concern. (An earlier design used `` `#name` `` raw-identifier bindings, which would have needed
+the Swift 6.2 compiler; inlining the bodies into the `setProperty` closures removed them.) Build
+note: the macro plugin binary must be built with a swift-syntax major that the host compiler's
+plugin protocol accepts, and **Xcode must be restarted after swapping the plugin binary** (it
+caches `-load-plugin-executable` in-process; a clean build / DerivedData wipe does not reload it).
 
 **6. `StaticProperty` for shared objects.** `@JS static func` maps to the existing
 `StaticFunction` (decorates the constructor), but there's **no `StaticProperty`** in core
@@ -1107,9 +1132,9 @@ before committing); each new impl struct → add to `providingMacros` in `Plugin
    `setUpEvents`. The macro output can't be pinned until this is decided; owned by
    the core side.
 2. **`GroupView` / `ViewName`** — in scope or follow-up?
-3. **Record field opt-out** — with all stored properties fields by default, how to
-   exclude one (an `@Ignore` attribute vs. a convention), and how a non-convertible
-   stored property is handled (diagnostic vs. silent skip).
+3. **Non-convertible record property** — every stored property is a field (no opt-out,
+   no `@Field`); how is a non-`AnyArgument` stored property handled (diagnostic vs.
+   silent skip)?
 4. **Discriminated unions** — `@Union` matches structurally in declaration order for v1;
    a tag-based mode (`@Union(discriminator: "type")`) for overlapping payload shapes is a
    deferred follow-up. Also: confirm `Union` is the right attribute name (vs. `JSUnion`).
@@ -1127,8 +1152,8 @@ module + view lifecycle → overridable instance methods (core-called); view pro
 single `@ViewProps` object (no `@Prop`), exposed as non-optional `self.props` (always
 current); `onViewPropsChanged(oldProps:)` gets only the previous props, typed `Props?`
 (`nil` on first application); `@ViewProps` distinct from `@Record`; no
-`@Constant` macro; `@ExpoView` props via metatype arg; `@Record`/`@ViewProps` fields
-are all stored properties by default — `@Field` only for options; field requiredness is
+`@Constant` macro; `@ExpoView` props via metatype arg; **`@Record`/`@ViewProps` fields
+are every stored property — no `@Field` attribute**; field requiredness is
 **inferred** (default value → optional; optional type → nullable+optional; non-optional
 no-default → required); **`@ViewProps` may be
 a `struct` (UIKit) or `class` (SwiftUI) — `@ViewProps` emits a value vs. class-bound
@@ -1139,22 +1164,25 @@ JS `Promise`; `async` functions stamped `@JavaScriptActor`; body runs synchronou
 the JS thread until the first suspension (JS-like)**. Unions: **`@Union` on an enum =
 typed N-case union (tagged, no `Any?`, → TS `A | B | C`); `Either` kept for inline
 2-type; structural match in declaration order, discriminated mode deferred**. Phase 2:
-**per-member bindings named with backtick raw identifiers (`` `#add` ``, never called by
-users; needs Swift 6.2 in the consumer), installed by one generated
-`_decorateJavaScriptObject(_ object:…)` that decorates the JS object core supplies (module
-object / SO prototype / constructor) — mirrors `ObjectDefinition.decorate(object:)`; each
-binding *is* the host-function body `(this, arguments) -> JavaScriptValue`, the decorate
-function does the `createFunction` call (parameter is `borrowing`, matching
-`ObjectDefinition.decorate`)**. Shared objects: **`static` Swift modifier marks JS-static
-members (→ constructor, `StaticFunction`) vs instance (→ prototype). All shared-object
-bindings are `static func`s (class-level decoration); an instance-member binding recovers
-its receiver from JS `this`, a static-member binding calls the Swift `static` member. A JS
-instance + static member sharing a name disambiguate by a `` `#static.name` `` qualifier
-(same scheme as property `` `#ready.get` ``). `static var` needs a core `StaticProperty`.
-Decoration is **class-level, once per class** — `static func _decorateJavaScriptClass`
-sets up constructor (statics) + prototype (instance funcs *and* properties, receivers from
-`this`); no per-instance pass. A module decorates its single object via
-`_decorateJavaScriptObject` with instance-method bindings on real `self`**.
+**one generated decorate function (`_decorateModule` for a module, `_decorateSharedObject` for a
+shared object) decorates the JS object core supplies (module object / SO prototype / constructor)
+via the closure-taking `JavaScriptObject.setProperty(_:)` —
+the decode-call-encode body is **inlined into each closure** (no separate named binding; tested as
+no slower than a named func). Mirrors `ObjectDefinition.decorate(object:)` (`borrowing` object).
+The closure captures `self` strong + `appContext` weak-guarded (matching `SyncFunctionDefinition`).
+Primitives (`Bool/Int/Double/String`) decode via `arguments[i].asDouble()`-style validating
+accessors and encode via `toJavaScriptValue(in:)` (no `Any`, no dynamic-type alloc); other types
+fall back to `T.getDynamicType().cast/castToJS`. Measured ~2.2× faster than the DSL and within
+1.04–1.23× of `@OptimizedFunction`. The entry point uses the `_`-prefix (runtime-called) with a
+macro-name suffix; a `@JS func decorate` can't collide since there are no named bindings.**
+Shared objects: **`static` Swift modifier marks JS-static members (→ constructor, `StaticFunction`)
+vs instance (→ prototype). An instance member's closure decorates the prototype and recovers its
+receiver from JS `this`; a static member's closure decorates the constructor and calls the Swift
+`static` member. A JS instance + static member sharing a name don't clash — they're closures on
+different JS objects. `static var` needs a core `StaticProperty`. Decoration is **class-level, once
+per class** — `static func _decorateSharedObject` sets up constructor (statics) + prototype
+(instance funcs *and* properties, receivers from `this`); no per-instance pass. A module decorates
+its single object via an instance-method `_decorateModule` on real `self`**.
 
 ## Further ideas
 
