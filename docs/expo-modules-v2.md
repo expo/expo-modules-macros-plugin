@@ -2,7 +2,7 @@
 
 - **Status:** Draft for review (signatures verified against `expo/main` core)
 - **Author:** Tomasz Sapeta
-- **Created:** 2026-05-31 · **Updated:** 2026-06-07
+- **Created:** 2026-05-31 · **Updated:** 2026-06-11
 - **Scope:** Apple/Swift macros in this repo (`apple/Sources/ExpoModulesMacros`)
 
 ## Goal
@@ -202,8 +202,8 @@ object for core to populate.
 ```swift
 @ExpoModule
 class MyModule: Module {
-  @Event var onProgress: (ProgressEvent) -> Void   // ProgressEvent: @Record
-  @Event var onReady: () -> Void                   // no payload
+  @Event var onProgress: (ProgressEvent) -> Void   // ProgressEvent: @Record; JS: addListener("progress")
+  @Event var onReady: () -> Void                   // no payload; JS: addListener("ready")
 
   func work() {
     self.onProgress(ProgressEvent(percent: 50))    // type-checked; dispatches to JS
@@ -213,27 +213,96 @@ class MyModule: Module {
 
 `@Event` is an **accessor macro**: a function-typed `var` can't be a stored property
 without an initializer, so it expands to a **computed property returning a closure** that
-captures `self` and dispatches by name into the typed `emit`:
+captures `self` **weakly** and dispatches by name into the typed `emit`:
 
 ```swift
 var onProgress: (ProgressEvent) -> Void {
-  { payload in self.emit(event: "onProgress", payload: payload) }
+  get { { [weak self] payload in self?.emit(event: "progress", payload: payload) } }
+}
+var onReady: () -> Void {
+  get { { [weak self] in self?.emit(event: "ready") } }   // no-payload overload — not payload: .undefined
 }
 ```
 
-This is the **same on modules and shared objects**: both expose
-`emit<P: AnyArgument>(event:payload:)` (`SharedObject.swift:102`; assumed added to
-`Module` to match — see [Core dependencies](#core-dependencies)), which converts the
-payload via `(~P.self).castToJS`. So a `@Event` payload can be **any `AnyArgument`** —
-primitive, `@Record`, shared object, `@Union`, etc. — with no dict requirement, and the
-no-payload case (`() -> Void`) dispatches `.undefined`.
+The weak capture matters when an author stores the closure (hands it to a delegate,
+keeps it in a callback table): a strong capture would extend the module/shared-object
+lifetime. After the emitter deallocates, the closure silently no-ops — the same behavior
+`emit` already has once the runtime is gone.
 
-`@ExpoModule`/`@SharedObject` separately collect `@Event` member names and emit
-`Events("onProgress", …)` into the synthesized definition, the same way they collect
-`@JS` members — so JS knows the event exists and `OnStartObserving` works.
+**Naming: the Swift property uses the `on` prefix; the JS wire name strips it.** The two
+sides idiomatically want different names. In Swift the property reads as invoking a
+handler (`self.onStatusChange(…)`) and the prefix keeps it from colliding with a state
+property (`status`). In JS, module/shared-object events are listened to by **bare
+names** — `addListener("statusChange")`, the Node/DOM idiom the newest team modules
+follow (expo-video: `statusChange`, `playingChange`, `timeUpdate`, `playToEnd`). So the
+default JS name is the Swift name with a leading `on` + capital stripped and the
+remainder decapitalized, acronym-aware (`onStatusChange` → `statusChange`,
+`onURLChange` → `urlChange`); names without the prefix (`online`, `statusChange`) pass
+through verbatim. `@Event("name")` overrides verbatim with no transformation — that's
+also the migration escape hatch for legacy `onX` *wire* names (`@Event("onContactsChange")`).
+View events are different on purpose: a `@ViewProps` function-typed field *is* a React
+handler prop, so it keeps its `onX` name untouched — a view event names a handler prop,
+an `@Event` names an emitted event. The macro doesn't enforce the `on` prefix on the
+Swift property (it's a convention; stripping simply doesn't fire without it).
+
+This is the **same on modules and shared objects**: core ships an **`EventEmitter`
+protocol** (`Core/Events/EventEmitter.swift`) and conforms **both** base types to it —
+`extension BaseModule: EventEmitter` (`Module.swift:28`) and `extension SharedObject:
+EventEmitter` (`SharedObject.swift:81`) — so `self.emit(...)` resolves on each. The
+protocol's extension supplies three `emit` overloads: `emit(event:)` (no payload),
+`emit(event:payload: JavaScriptValue)` (pre-converted), and the typed
+`emit<P: AnyArgument>(event:payload: sending P)`, which converts the payload via
+`(~P.self).castToJS`. So a `@Event` payload can be **any `AnyArgument`** — primitive,
+`@Record`, shared object, `@Union`, etc. — with no dict requirement; the no-payload case
+(`() -> Void`) calls the dedicated `emit(event:)` overload, and the payload case passes
+the closure's `payload` straight through (a fresh local, consumed once — satisfies
+`sending`). **All of this now exists in core; module events are no longer gated.**
+
+**No `Events(...)` DSL.** `@Event` does not register event names into the synthesized
+definition — `@ExpoModule`/`@SharedObject` ignore `@Event` members entirely; core
+discovers events through another path. `@Event` is a **self-contained accessor macro**
+with **zero touch-points** in the module/shared-object macros.
+
+**Not stamped `@JavaScriptActor` — an async event member (the default) stays
+non-isolated.** `emit` is
+itself non-isolated and `runtime.schedule`s onto the JS thread internally (it captures
+the emitter `nonisolated(unsafe) weak`, since the emitter need not be `Sendable`). So an
+author can fire `self.onProgress(...)` from **any** thread/isolation with no `await` at
+the call site, and `emit` does the hop. Stamping `@JavaScriptActor` would *defeat* this —
+it would force an actor hop at the call site for the common background-work caller. The
+base classes (`open class BaseModule` / `open class SharedObject`) carry no actor
+isolation, so an un-stamped `@Event` var is non-isolated by default; no `nonisolated`
+keyword is needed in the expansion. This is the **one JS-related member that is
+deliberately not `@JavaScriptActor`** — the opposite of `@JS func`/`@JS var`.
 
 The synthesized closure allocates per access — negligible for events (not a hot loop).
-`@Event` members are stamped `@JavaScriptActor` like other JS members.
+
+**Diagnostics and compile-time assertions** (implemented in `EventMacro.swift`, PR #17):
+- As a **peer**, `@Event` emits the same never-called conformance assertion as `@JS`,
+  checking both that the **payload type is `AnyArgument`** (skipped for primitives) and
+  that the **enclosing type conforms to `EventEmitter`** — so attaching `@Event` to a
+  type that can't emit fails with a clear conformance error on the user's declaration
+  instead of an opaque "no member 'emit'".
+- `@Event let` errors with a **fix-it** replacing `let` with `var` (the property must be
+  computed; it's getter-only anyway, so nothing is lost).
+- `@Event` + `@JS` on one property is rejected — an event is exposed to JS on its own.
+- Shape validation: instance-only (no `static`), function type required (optional
+  function types rejected — an event is always present), `Void` return, at most one
+  payload parameter, no initializer, no author-written accessors. `@Sendable` and
+  parenthesized function types are unwrapped.
+
+> **Synchronous events: `@Event(sync: true)` — macro side implemented, gated on core
+> `emitSync`.** The default `emit` always *schedules* (deferred dispatch). `sync: true`
+> opts into dispatching **inline on the JS thread**: the synthesized closure calls
+> **`emitSync`** instead of `emit`, and `@ExpoModule`/`@SharedObject` stamp that member
+> `@JavaScriptActor` — making "must be on the JS thread" a compile-time guarantee rather
+> than a runtime crash. That's the only case where a `@Event` member gets the stamp (the
+> inverse of the async default). The macro work is done (`@Event(sync:)` parsing, the
+> `emitSync` call, the stamping in both member macros); **core must still add the
+> `@JavaScriptActor emitSync(event:)`/`emitSync(event:payload:)` overloads** (skip
+> `runtime.schedule`, convert + `dispatchEvent` inline, swallow + warn on conversion
+> failure to keep the closure type non-throwing). Until then the parameter is harmless —
+> generated code references `emitSync` only when an author opts in.
 
 #### Module lifecycle
 
@@ -410,10 +479,13 @@ module closure = call on real `self`; shared-object instance closure = receiver 
 `this`. The decode/encode of the *other* arguments is identical in both.
 
 **Events** use the same `@Event` function-typed property as modules
-([Module events](#module-events)); the synthesized closure dispatches into
-`emit<P: AnyArgument>(event:payload:)` (`SharedObject.swift:102`). `@SharedObject`
-collects `@Event` names into the class definition's `Events(…)`. (Modules and shared
-objects share one events model — same `@Event`, same typed `emit`.)
+([Module events](#module-events)); the synthesized closure dispatches into the
+`EventEmitter` `emit` overloads (`SharedObject: EventEmitter`, `SharedObject.swift:81`).
+On a shared object the `@Event` accessor's `self` *is* the concrete instance (the getter
+runs on a real `Cache`, not inside `_decorateSharedObject`), so `self.emit(...)` works
+directly. `@SharedObject` emits **no `Events(…)`** for `@Event` members and does not need
+the stamp — the events model is identical to modules (same `@Event`, same non-isolated
+`emit`, no `Events(...)` registration).
 
 For full parity, `@SharedObject` should also gain **property setters** (as modules do).
 
@@ -990,10 +1062,10 @@ untyped runtime; no generic runtime type is required.
 is exactly the `AnyArgument` protocol: primitives, `Record`, `Convertible`, shared
 objects (`AnySharedObject: AnyArgument`), `UIView`, `JavaScriptObject`,
 arrays/typed-arrays, `Either`, `Promise`. `Conversions.anyToJavaScriptValue` already
-casts any `AnyArgument` to JS via `getDynamicType().castToJS()`. Precedent:
-`SharedObject.emit<P: AnyArgument>(event:payload:)`
-(`SharedObjects/SharedObject.swift:102`) is already exactly a typed-payload event
-send — modules/views just don't have an equivalent yet.
+casts any `AnyArgument` to JS via `getDynamicType().castToJS()`. This is exactly the
+`EventEmitter.emit<P: AnyArgument>(event:payload: sending P)` overload
+(`Core/Events/EventEmitter.swift`), which core now provides on both `BaseModule` and
+`SharedObject` via the `EventEmitter` conformance.
 
 **`EventDispatcher` is dropped from the macro's output.** It's a heap class found
 reflectively (`Mirror`) that only forwards to a `([String: Any]) -> Void` handler;
@@ -1006,10 +1078,12 @@ the real emitters (`sendEvent`, `dispatchEvent`) take a dict directly.
   approach in `SwiftUIViewProps.setUpEvents` doesn't apply). Still a *reducing* change
   vs. the `EventDispatcher` indirection. See [Core dependencies](#core-dependencies).
 - **Modules & shared objects:** a `@Event` function-typed property; the macro (not core)
-  synthesizes a computed property whose closure dispatches by name into
-  `emit<P: AnyArgument>(event:payload:)` — the same typed call on both
-  (`SharedObject` has it; `Module` assumed to match). Names are collected by
-  `@ExpoModule`/`@SharedObject` into `Events(…)`.
+  synthesizes a computed property whose getter returns a closure that dispatches by name
+  into the `EventEmitter` `emit` overloads — the same typed call on both, now that core
+  conforms `BaseModule` and `SharedObject` to `EventEmitter`. The member is **not**
+  stamped `@JavaScriptActor` (it stays non-isolated; `emit` schedules onto the JS thread
+  itself), and the macro emits **no `Events(…)`** — `@Event` is self-contained, with no
+  touch-point in `@ExpoModule`/`@SharedObject`.
 
 ## Verified core DSL signatures
 
@@ -1097,12 +1171,16 @@ SwiftUI's `View<Props>` bound on the latter. A `struct` props then fails to conf
 SwiftUI view → clean compiler error; no macro type-check needed. UIKit binds on the
 value protocol. (See [`@ViewProps`](#struct-or-class--the-conformance-carries-the-constraint).)
 
-**4. Typed `Module.emit`.** Module events synthesize a call to
-`emit<P: AnyArgument>(event:payload:)`, which `SharedObject` already has
-(`SharedObject.swift:102`) but `Module`/`BaseModule` does not (it has only the
-dict-based `sendEvent(_:_: [String: Any?])`). Add the same typed `emit` to `BaseModule`
-so module and shared-object events share one mechanism and accept any `AnyArgument`
-payload. (See [Module events](#module-events).)
+**4. Typed `emit` on modules — ✅ done in core.** Module events synthesize a call to
+`emit<P: AnyArgument>(event:payload:)`. Core has since added an **`EventEmitter`
+protocol** (`Core/Events/EventEmitter.swift`) whose extension supplies the typed `emit`
+(plus `emit(event:)` no-payload and `emit(event:payload: JavaScriptValue)`) and conformed
+**both** base types — `extension BaseModule: EventEmitter` (`Module.swift:28`) and
+`extension SharedObject: EventEmitter` (`SharedObject.swift:81`). So module and
+shared-object events share one mechanism and `self.emit(...)` resolves on each;
+**`@Event` is no longer gated on core.** Note the payload param is `sending P` and the
+no-payload form is a dedicated overload (not `payload: .undefined`). (See
+[Module events](#module-events).)
 
 **5. No special toolchain/language-mode requirement.** The generated code uses only plain
 identifiers (`_decorateModule`, `argN`) — no raw identifiers — so there's no
@@ -1118,8 +1196,10 @@ caches `-load-plugin-executable` in-process; a clean build / DerivedData wipe do
 needs a core `StaticProperty` that decorates the constructor object. (See
 [Static vs. instance members](#static-vs-instance-members).)
 
-Until these land, generated `@ViewProps`/`@ExpoView`/`@Event` code won't run; the macro
-tests verify expansion shape only, not runtime.
+Until these land, generated `@ViewProps`/`@ExpoView` code won't run; the macro
+tests verify expansion shape only, not runtime. (`@Event` is the exception — its core
+side, `EventEmitter` + the `BaseModule`/`SharedObject` conformances, has shipped, so
+module/shared-object events can run against today's core.)
 
 ## Implementation plan
 
@@ -1140,9 +1220,23 @@ before committing); each new impl struct → add to `providingMacros` in `Plugin
 4. **`@ExpoView` macro.** New `ExpoViewMacro.swift`, `_synthesizedViewDefinition()`,
    `: ExpoView` check, props metatype arg, `Props(...)`/`View<Props,_>` wrapper,
    event-name gathering, `@ExpoModule(views:)` wiring. **Gated on the core contract.**
-5. **`@SharedObject` parity** — class-level `Events` + property setters.
-6. **Module + view events** — typed function-typed members/fields and their send
-   synthesis, once the events contract is pinned.
+5. **`@SharedObject` parity** — property setters. (No `Events` collection — `@Event`
+   emits no `Events(…)`.)
+6. **`@Event` (modules + shared objects) — ✅ implemented (PR #17)** (`EventMacro.swift`): an
+   `AccessorMacro` whose getter returns the weak-capturing dispatching closure
+   (`emit(event:payload:)` with a payload, `emit(event:)` without), plus a `PeerMacro`
+   conformance assertion (payload `AnyArgument` + enclosing type `EventEmitter`, one
+   merged helper naming the user's type via the lexical context), default-name
+   derivation stripping the `on` prefix (`onStatusChange` → JS `"statusChange"`), the
+   `@Event("name")` verbatim override, a `let`→`var` fix-it, `@JS`-exclusivity, full
+   shape validation, and `@Event(sync: true)` (selects `emitSync` + the
+   `@JavaScriptActor` stamp from both member macros). **Async events are ungated** —
+   core's `EventEmitter` conformances have shipped; `sync: true` is gated on core adding
+   `emitSync`. Remaining: the `@attached(accessor) @attached(peer, names: arbitrary)
+   macro Event(_ name: String? = nil, sync: Bool = false)` declaration in core's
+   `ExpoModulesMacros.swift`, the core `emitSync` overloads, and runtime verification in
+   a real module. **View events**
+   (`@ViewProps` function-typed fields) remain gated on the core view contract.
 
 ## Testing
 
@@ -1170,8 +1264,13 @@ before committing); each new impl struct → add to `providingMacros` in `Plugin
 4. **Discriminated unions** — `@Union` matches structurally in declaration order for v1;
    a tag-based mode (`@Union(discriminator: "type")`) for overlapping payload shapes is a
    deferred follow-up. Also: confirm `Union` is the right attribute name (vs. `JSUnion`).
-5. **`@Event` name override** — JS event name comes from the property name; a per-event
-   override (`@Event("customName")`) if needed is a small follow-up.
+5. **`@Event(sync:)` core contract** — the macro side is implemented (`sync: true`
+   selects `emitSync` and gets the `@JavaScriptActor` stamp from
+   `@ExpoModule`/`@SharedObject`), but the **core `emitSync` overloads don't exist yet**;
+   the parameter must stay unused until they land. Open core-side details: exact
+   signatures, and whether conversion failures throw or swallow + warn (the macro assumes
+   non-throwing). The `@Event("customName")` name override is in scope for v1 (verbatim,
+   no `on`-stripping).
 6. **Phase 3 front end** — `expo-type-information` already parses Swift modules (via
    SourceKitten) and emits TS; phase 3 adapts it to the new attributes. Open: keep
    SourceKitten or move to SwiftSyntax for consistency with the macro toolchain.
@@ -1184,8 +1283,22 @@ before committing); each new impl struct → add to `providingMacros` in `Plugin
 
 Resolved: events → typed payloads (`AnyArgument`), no `EventDispatcher`; view events
 fold into `@ViewProps` function-typed fields; **module & shared-object events are a
-`@Event` function-typed property → macro synthesizes a computed closure dispatching into
-the typed `emit<P: AnyArgument>` (same on both; needs `Module.emit` added to core)**;
+`@Event` function-typed property → an accessor macro whose getter returns a
+weak-capturing closure (`[weak self]`, so a stored closure can't extend the emitter's
+lifetime) dispatching into the `EventEmitter` `emit` overloads (typed `emit<P>(event:
+payload: sending P)` for a payload, `emit(event:)` for none). The JS wire name strips
+the Swift property's `on` prefix (`onStatusChange` → `"statusChange"`, acronym-aware;
+un-prefixed names verbatim; `@Event("name")` overrides verbatim — the escape hatch for
+legacy `onX` wire names), matching the bare-name listener idiom of the newest modules
+(expo-video) while the Swift side keeps the handler-style prefix; view events keep `onX`
+untouched since a `@ViewProps` function-typed field is a React handler prop. Core already ships
+`EventEmitter` and conforms both `BaseModule` and `SharedObject` to it, so this is
+ungated. An async event is deliberately **not** stamped `@JavaScriptActor` — it stays
+non-isolated so it's callable from any thread, and `emit` schedules onto the JS thread
+itself; the macro emits **no `Events(…)`**. The synchronous opt-in is implemented too:
+`@Event(sync: true)` → the closure calls `emitSync` (inline dispatch) and
+`@ExpoModule`/`@SharedObject` stamp that member `@JavaScriptActor` (their only `@Event`
+touch-point) — gated on core adding the `emitSync` overloads; unused until then**;
 module + view lifecycle → overridable instance methods (core-called); view props →
 single `@ViewProps` object (no `@Prop`), exposed as non-optional `self.props` (always
 current); `onViewPropsChanged(oldProps:)` gets only the previous props, typed `Props?`
