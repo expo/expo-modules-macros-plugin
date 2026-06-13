@@ -1011,31 +1011,63 @@ conversion is decentralized across the dynamic-type converters (coordinated by
 behavior; it just hoists the arity check into the closure and selects each converter
 statically. The four pieces:
 
-**1. Arity is a range, not an exact count.** A trailing run of `Optional<T>` parameters may
-be omitted, so core computes a **required** count (total minus the number of *trailing*
-optionals) and a **maximum** (total), then rejects `received < required || received > max`
+**1. Arity is a range, not an exact count — and the macro widens that range past what the
+DSL can express.** A trailing run of *omittable* parameters may be left off, so core computes
+a **required** count (total minus the number of trailing omittable params) and a **maximum**
+(total), then rejects `received < required || received > max`
 (`SyncFunctionDefinition.swift:55–76`, `JavaScriptUtils.swift:16`). The macro knows both
-numbers at expansion time and emits the same range check. A non-trailing optional does
-**not** lower the required count — only a contiguous trailing run does, because arguments
-are positional. The example above checks `== 2` only because both params are required
-(required == max); for `@JS func f(a: Int, b: String? = nil)` it would emit
-`guard (1...2).contains(arguments.count)`. The thrown error is core's
-`InvalidArgsNumberException((received:expected:required:))`, not an ad-hoc `Exception`.
+numbers at expansion time and emits the same range check, returning core's
+`InvalidArgsNumberException((received:expected:required:))` rather than an ad-hoc `Exception`.
 
-> **Gap (shipped vs. target).** The current codegen (`DecorateModuleBuilder.swift:47`)
-> emits an **exact** `arguments.count == <total>` check and throws an ad-hoc
-> `Exception(name: "InvalidArgumentCount", …)`. That over-rejects a legitimately-omitted
-> trailing optional and diverges from the DSL'"'"'s error type. Moving to the required/max
-> range and `InvalidArgsNumberException` is part of completing phase 2.
+What counts as **omittable** is where the macro gains over the DSL. The DSL binds a *closure*,
+and a closure parameter can't carry a Swift default value, so core's only notion of "optional"
+is `Optional<T>` (an omitted slot becomes `nil`). The macro binds the **real function**, so it
+sees the declaration and can honor **both**:
+
+| trailing parameter | omitted ⇒ | how the call is emitted |
+| --- | --- | --- |
+| has a default value (`b: Int = 5`) | Swift applies the default | the arg is **left out of the `self.f(...)` call** |
+| `Optional<T>`, no default (`b: Int?`) | `nil` | `nil` (or the decoded value) is passed |
+| required (`b: Int`) | not omittable | always decoded and passed |
+
+So `required = total − (length of the maximal trailing run of params that are defaulted **or**
+optional)`. A non-omittable param part-way through stops the run: `f(a: Int = 1, b: Int)` has
+`required == 2` (the trailing `b` is required, so `a` can't be dropped either — args are
+positional). `f(a: Int, b: String? = nil)` emits `guard (1...2).contains(arguments.count)`;
+`f(a: Int, b: Int = 5, c: String? = nil)` emits `guard (1...3).contains(...)`, and at
+`received == 1` it calls `self.f(a: arg0)` (Swift fills `b`, `c` is its own `nil` default).
+
+The cost: a defaulted arg can't be threaded through one static call expression — when it may
+or may not be present, the binding **branches on `arguments.count`** and emits one
+`self.f(...)` shape per valid arity (decoding only the args that are present in that branch).
+Pure-`Optional` ranges don't need this (the omitted slot is just `nil`); only **defaults**
+force the per-arity call shapes. This is the macro doing at compile time what a closure
+fundamentally cannot: respecting author-written default expressions instead of forcing every
+optional-with-a-default down to `nil`.
+
+> **Gap (shipped vs. target).** The current codegen (`DecorateModuleBuilder.swift:47–70`)
+> emits an **exact** `arguments.count == <total>` check, throws an ad-hoc
+> `Exception(name: "InvalidArgumentCount", …)`, and unconditionally decodes and passes every
+> `arg<i>`. So it over-rejects an omitted trailing optional, ignores author-written default
+> values entirely, and diverges from the DSL'"'"'s error type. Moving to the required/max range
+> (with the default-aware per-arity call shapes above) and `InvalidArgsNumberException` is part
+> of completing phase 2.
 
 **2. `null` / `undefined` map by the parameter's static optionality.** Both JS `null` and
 `undefined` decode to `nil` for an `Optional<T>` parameter (`DynamicOptionalType.swift:26–31`),
 and to a thrown `NullCastException<T>` for a required non-optional one
-(`Conversions.swift:328`, e.g. `DynamicBoolType.swift:17`). An **omitted** trailing argument
-(allowed by the arity range) is treated as `nil` — the same as passing `undefined` — so it
-only type-checks when the Swift param is optional. The macro decodes optional params through
-the dynamic-optional converter (which already encodes this), so it inherits the behavior
-rather than re-implementing the `null`/`undefined`/missing trichotomy.
+(`Conversions.swift:328`, e.g. `DynamicBoolType.swift:17`). The macro decodes optional params
+through the dynamic-optional converter (which already encodes this), so it inherits that
+behavior rather than re-implementing the `null`/`undefined`/missing trichotomy.
+
+**Omission** (a trailing slot the arity range allows to be absent) is resolved by point 1, not
+here: a defaulted param's slot is left out of the call so Swift applies the default; an
+optional-no-default param's slot becomes `nil`. The two differ only for an *absent* arg — a
+slot **present** as JS `null`/`undefined` always decodes through the converter (so `null` →
+`nil` for an optional, `null` → throw for a required non-optional, regardless of any default).
+We do **not** treat an explicit in-range `undefined` as "use the Swift default"; only true
+omission (a shorter `arguments.count`) triggers a default, matching positional-argument
+semantics and keeping the per-arity branch the single place defaults are applied.
 
 **3. Type mismatches throw a typed, index-bearing error.** A primitive fast-path accessor
 (`asInt()`/`asDouble()`/`asString()`/`asBool()`) throws a conversion error on a kind mismatch
