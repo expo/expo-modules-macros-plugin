@@ -127,7 +127,10 @@ extension ExpoModuleMacro: MemberAttributeMacro {
     // `@JS` sync members run on the JS thread; stamp `@JavaScriptActor` so isolation is
     // checked at compile time. Skipped when the member already chose an isolation
     // (`async`, `nonisolated`, or another global actor) — see `shouldStampJavaScriptActor`.
-    if memberHasJSAttribute(member),
+    // `@Event(sync: true)` members get the stamp too: a sync event dispatches inline, so the
+    // isolation forces its call site onto the JS thread. Async events (the default) are
+    // deliberately left unstamped — their `emit` schedules onto the JS thread itself.
+    if memberHasJSAttribute(member) || isSyncEventMember(member),
       shouldStampJavaScriptActor(on: member, enclosedBy: declaration) {
       attributes.append("@JavaScriptActor")
     }

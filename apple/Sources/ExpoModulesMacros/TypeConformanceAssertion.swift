@@ -5,6 +5,11 @@ import SwiftSyntax
 /// asserts the conformance (`@JS`, `@Record`, …).
 internal let jsConvertibleProtocolName = "AnyArgument"
 
+/// The protocol a type must conform to for `self.emit(event:…)` to resolve; core conforms
+/// `BaseModule` and `SharedObject` to it. Asserted by `@Event` so attaching it to a type that can't
+/// emit fails with a conformance diagnostic instead of an opaque "no member 'emit'" error.
+internal let eventEmitterProtocolName = "EventEmitter"
+
 /// Types we never assert because they're statically known to conform and never reach the dynamic
 /// converter: the JS primitives. Asserting them would only add noise to the expansion. Kept here
 /// (rather than reusing the decode-path's `fastDecodeAccessor`) because "known-to-conform" is a
@@ -64,6 +69,15 @@ internal func typeConformanceAssertions(for assertions: [ConformanceAssertion]) 
     \(raw: bodies.joined(separator: "\n"))
     }
     """
+}
+
+/// The type to assert for a boundary type as written: trailing optional markers are unwrapped to the
+/// core type, and a known-conforming primitive returns `nil` (nothing to assert). Shared with
+/// `@Event`, which folds its single payload type into a combined assertion of its own shape rather
+/// than reusing the whole body fragment below.
+internal func assertableBoundaryType(_ type: String) -> String? {
+  let unwrapped = unwrappedOptional(type)
+  return knownConformingPrimitives.contains(unwrapped) ? nil : unwrapped
 }
 
 /// The assertion's body fragment: a nested generic helper named after the member, plus one call per

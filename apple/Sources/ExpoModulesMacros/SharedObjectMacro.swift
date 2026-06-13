@@ -95,7 +95,10 @@ extension SharedObjectMacro: MemberAttributeMacro {
     providingAttributesFor member: some DeclSyntaxProtocol,
     in context: some MacroExpansionContext
   ) throws -> [AttributeSyntax] {
-    guard memberHasJSAttribute(member),
+    // `@Event(sync: true)` members are stamped alongside `@JS` ones: a sync event dispatches
+    // inline, so the isolation forces its call site onto the JS thread. Async events (the
+    // default) stay unstamped — their `emit` schedules onto the JS thread itself.
+    guard memberHasJSAttribute(member) || isSyncEventMember(member),
       shouldStampJavaScriptActor(on: member, enclosedBy: declaration) else {
       return []
     }
