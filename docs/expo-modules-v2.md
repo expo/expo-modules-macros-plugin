@@ -168,38 +168,37 @@ in `ModuleDefinition` (name from `ModuleNameDefinition` else `String(describing:
 `ModuleDefinition.swift:74–76`) and `ModuleHolder.name` (`ModuleHolder.swift:36`).
 
 **Decision: the macro never emits `Name`; it synthesizes the fully-resolved name as a
-non-optional `static let`.** The macro already knows the final name in every case —
-`jsNameArgument(of: node) ?? classDecl.name.text` (the exact expression that feeds today's
-`Name(...)` default) — so it emits, always:
+non-optional `static let`.** The macro already knows the final name in every case:
+`jsNameArgument(of: node) ?? classDecl.name.text` (the exact expression that fed the old
+`Name(...)` default). So it emits, always:
 
 ```swift
-public static let _synthesizedModuleName = "MyModule"   // or "Bar" for @ExpoModule("Bar")
+public static let _jsName = "MyModule"   // or "Bar" for @ExpoModule("Bar")
 ```
 
-A plain stored constant (the value is a compile-time literal — no computed property,
+A plain stored constant (the value is a compile-time literal, not a computed property,
 method, or optional). Core reads it directly where it reads `ModuleNameDefinition` today,
 feeding *both* native registration and the JS `__expo_module_name__` so the two can't
 diverge. Because the name is **already resolved**, core's `String(describing: type)`
-fallback never runs for a macro module — it stays only for hand-written DSL modules.
+fallback never runs for a macro module; it stays only for hand-written DSL modules.
 
-- The `AnyModule` requirement is `static var _synthesizedModuleName: String? { get }` with
-  a **`nil` default** in the protocol extension (matching the no-op defaults on
-  `_synthesizedDefinition()`/`_decorateModule(...)`). `nil` means "not a macro module" →
-  core falls back to `String(describing:)`. A macro module always overrides it with a
-  non-`nil` `static let`, so the resolved member the macro emits is non-optional even
-  though the protocol slot is `String?`.
-- **Precedence stays:** a registration-time override (`register(…, name:)` →
-  `ModuleHolder._name`) still wins over `_synthesizedModuleName`, which wins over the
-  type-name fallback. So: `_name` → `_synthesizedModuleName` → `String(describing:)`.
-- Rejected: setting `__expo_module_name__` only in `_decorateModule` — that names the JS
+- `_jsName` is a plain `public static let` the macro emits. It carries no protocol
+  requirement and no optionality: core distinguishes a macro module from a DSL one by
+  whether the type provides `_jsName`, not by a `nil` sentinel.
+- **Precedence stays:** a registration-time override (`register(…, name:)` to
+  `ModuleHolder._name`) still wins over `_jsName`, which wins over the type-name
+  fallback. So: `_name`, then `_jsName`, then `String(describing:)`.
+- The name `_jsName` is kind-neutral (it describes a JS-facing name independent of what it
+  names), so `@SharedObject` class names can adopt the same property.
+- Rejected: setting `__expo_module_name__` only in `_decorateModule`. That names the JS
   object but not native registration (`registry[holder.name]` keys on the definition/type
   name), so the module would register natively under the type name while reporting the
   custom name to JS. One resolved source, read before registration, avoids that.
 
-**Core dependency:** core reads `_synthesizedModuleName` for the module name (when non-`nil`),
-ahead of the type-name fallback and behind a registration `_name`. The same applies to
-`@SharedObject` class names (`ClassDefinition` has the parallel `Name`/type-name fallback).
-See [Core dependencies](#core-dependencies).
+**Core dependency:** core reads `_jsName` for the module name, ahead of the type-name
+fallback and behind a registration `_name`. The same applies to `@SharedObject` class names
+(`ClassDefinition` has the parallel `Name`/type-name fallback). See
+[Core dependencies](#core-dependencies).
 
 #### Property getter + setter
 
@@ -1239,14 +1238,12 @@ caches `-load-plugin-executable` in-process; a clean build / DerivedData wipe do
 needs a core `StaticProperty` that decorates the constructor object. (See
 [Static vs. instance members](#static-vs-instance-members).)
 
-**7. Read the module name without `Name` (retire the DSL component).** Add a
-`static var _synthesizedModuleName: String? { get }` requirement to `AnyModule` (default
-`nil`); the macro synthesizes a non-optional, **fully-resolved** `static let
-_synthesizedModuleName = "<name>"` for *every* `@ExpoModule` (the class name, or the
-`@ExpoModule("Bar")` argument). Core reads it where `ModuleDefinition`/`ModuleHolder` read
-`ModuleNameDefinition` today, ordered `_name` (registration override) →
-`_synthesizedModuleName` → `String(describing:)` (the last only for non-macro modules, when
-the property is `nil`). Same for `@SharedObject` class names. (See
+**7. Read the module name without `Name` (retire the DSL component).** The macro synthesizes
+a non-optional, **fully-resolved** `public static let _jsName = "<name>"` for *every*
+`@ExpoModule` (the class name, or the `@ExpoModule("Bar")` argument). Core reads it where
+`ModuleDefinition`/`ModuleHolder` read `ModuleNameDefinition` today, ordered `_name`
+(registration override), then `_jsName`, then `String(describing:)` (the last only for
+non-macro modules, which don't provide `_jsName`). Same for `@SharedObject` class names. (See
 [Module name](#module-name--retire-the-name-dsl-component).)
 
 Until these land, generated `@ViewProps`/`@ExpoView` code won't run; the macro
@@ -1387,11 +1384,11 @@ different JS objects. `static var` needs a core `StaticProperty`. Decoration is 
 per class** — `static func _decorateSharedObject` sets up constructor (statics) + prototype
 (instance funcs *and* properties, receivers from `this`); no per-instance pass. A module decorates
 its single object via an instance-method `_decorateModule` on real `self`**. Module name:
-**retire the `Name` DSL component — the macro never emits it. Instead it synthesizes the
+**retire the `Name` DSL component, the macro never emits it. Instead it synthesizes the
 fully-resolved name (class name, or the `@ExpoModule("Bar")` arg) as a non-optional
-`static let _synthesizedModuleName`, so core never runs `String(describing:)` for a macro
+`public static let _jsName`, so core never runs `String(describing:)` for a macro
 module. Core reads it (feeding both native registration and JS `__expo_module_name__`, so
-they can't diverge), ordered `_name` override → `_synthesizedModuleName` → type-name
+they can't diverge), ordered `_name` override, then `_jsName`, then type-name
 fallback. Same for `@SharedObject` class names**.
 
 ## Further ideas
