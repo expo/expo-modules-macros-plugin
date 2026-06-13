@@ -131,12 +131,13 @@ discovering the JS surface from `@JS`-marked members.
 
 ### `@ExpoModule`
 
-`@ExpoModule` / `@ExpoModule("CustomName")` on a module class. Synthesizes
-`_synthesizedDefinition() -> [AnyDefinition]` from the module name plus the `@JS`
-members in the body, and (when the class doesn't inherit `Module`/`BaseModule`)
-the `appContext` storage, `init(appContext:)`, and the `AnyModule` conformance —
-so inheriting from `Module` is optional. It also stamps `@ModuleDefinitionBuilder`
-on a user-written `definition()`.
+`@ExpoModule` / `@ExpoModule("CustomName")` on a module class. Binds the `@JS` members
+directly into the module's JS object via `_decorateModule` (the phase-2 form, already
+shipped), and (when the class doesn't inherit `Module`/`BaseModule`) synthesizes the
+`appContext` storage, `init(appContext:)`, and the `AnyModule` conformance — so inheriting
+from `Module` is optional. It also stamps `@ModuleDefinitionBuilder` on a user-written
+`definition()`. The synthesized `_synthesizedDefinition()` is now (near-)empty — members
+moved to `_decorateModule`, and `Name` is being retired (see below).
 
 ```swift
 @ExpoModule(views: [MyView.self])
@@ -157,6 +158,34 @@ Arguments:
 - `views: [Any.Type] = []` — view classes; each contributes
   `MyView._synthesizedViewDefinition()` (see [Views](#views)). Read with the
   existing `classListArgument(of:label:"views")` `.self` parser.
+
+#### Module name — retire the `Name` DSL component
+
+`Name(...)` is the last DSL element the macro still emits (functions/properties have moved
+to `_decorateModule`; it sits alone in `_synthesizedDefinition()`). It's **redundant in the
+common case**: core already resolves an absent name to the Swift type name — twice over,
+in `ModuleDefinition` (name from `ModuleNameDefinition` else `String(describing: type)`,
+`ModuleDefinition.swift:74–76`) and `ModuleHolder.name` (`ModuleHolder.swift:36`).
+
+**Decision: the macro never emits `Name`.**
+- **No custom name** (`@ExpoModule`) — emit nothing; core's type-name fallback produces the
+  identical name. `_synthesizedDefinition()` becomes empty (or goes away entirely once
+  nothing else populates it).
+- **Custom name** (`@ExpoModule("Bar")`) — convey it through a **non-DSL channel** that
+  feeds *both* native registration and the JS `__expo_module_name__`, so the two can't
+  diverge. The sound channel is a synthesized **`_synthesizedModuleName` static** (added as
+  an `AnyModule` requirement next to `_synthesizedDefinition()`), read by `ModuleDefinition`
+  in the same place it reads `ModuleNameDefinition` today.
+  - Rejected: setting `__expo_module_name__` only in `_decorateModule` — that names the JS
+    object but not native registration (`registry[holder.name]` keys on the
+    definition/type name), so the module would register natively under the type name while
+    reporting the custom name to JS. One source of truth, resolved at definition-build time,
+    avoids that.
+
+**Core dependency:** core reads `_synthesizedModuleName` (when present) for the module
+name, retiring its reliance on `ModuleNameDefinition`. The same applies to `@SharedObject`
+class names (`ClassDefinition` has the parallel `Name`/type-name fallback). See
+[Core dependencies](#core-dependencies).
 
 #### Property getter + setter
 
@@ -1196,6 +1225,13 @@ caches `-load-plugin-executable` in-process; a clean build / DerivedData wipe do
 needs a core `StaticProperty` that decorates the constructor object. (See
 [Static vs. instance members](#static-vs-instance-members).)
 
+**7. Read the module name without `Name` (retire the DSL component).** To stop emitting
+`Name(...)`, core should read a synthesized **`_synthesizedModuleName`** static (when the
+author gave `@ExpoModule("Bar")`) in the same place `ModuleDefinition`/`ModuleHolder`
+currently read `ModuleNameDefinition`, and otherwise keep the existing type-name fallback.
+The default (no custom name) needs **no core change** — the fallback already applies.
+Same for `@SharedObject` class names. (See [Module name](#module-name--retire-the-name-dsl-component).)
+
 Until these land, generated `@ViewProps`/`@ExpoView` code won't run; the macro
 tests verify expansion shape only, not runtime. (`@Event` is the exception — its core
 side, `EventEmitter` + the `BaseModule`/`SharedObject` conformances, has shipped, so
@@ -1333,7 +1369,12 @@ receiver from JS `this`; a static member's closure decorates the constructor and
 different JS objects. `static var` needs a core `StaticProperty`. Decoration is **class-level, once
 per class** — `static func _decorateSharedObject` sets up constructor (statics) + prototype
 (instance funcs *and* properties, receivers from `this`); no per-instance pass. A module decorates
-its single object via an instance-method `_decorateModule` on real `self`**.
+its single object via an instance-method `_decorateModule` on real `self`**. Module name:
+**retire the `Name` DSL component — the macro never emits it. No custom name → core's existing
+type-name fallback (`ModuleDefinition`/`ModuleHolder`) covers it, zero core change; custom name
+(`@ExpoModule("Bar")`) → a synthesized `_synthesizedModuleName` static core reads (feeding both
+native registration and JS `__expo_module_name__`, so they can't diverge), not a JS-only
+`__expo_module_name__` write. Same for `@SharedObject` class names**.
 
 ## Further ideas
 
