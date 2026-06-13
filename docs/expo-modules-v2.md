@@ -1205,10 +1205,78 @@ not Swift types, so the macro can only honor an overload JS could itself tell ap
 purely syntactic on the declared types (a fixed Swift-type → JS-kind table), so it runs entirely
 at expansion time with a clear diagnostic, never a silent last-writer-wins.
 
+**Grouping is per JS object, not per name globally.** In a shared object a **static** func and
+an **instance** func may share a JS name without being overloads of each other — they decorate
+different JS objects (constructor vs. prototype), so `Cache.get` and `cache.get` coexist, the same
+way the doc already notes for properties ([static vs. instance](#static-vs-instance-members)). The
+macro therefore groups overload candidates **within** the static set and **within** the instance
+set separately; a static and an instance func never dispatch through one host function. By the
+same logic a `@JS var` and a `@JS func` that resolve to the same JS name on the same object **do**
+collide (a property descriptor and a function can't share a key) — that's a tier-3-style
+diagnostic, not an overload.
+
 > **Status: designed, not built.** Today each `@JS func` emits its own `setProperty(jsName)`
 > (`DecorateModuleBuilder.swift:113`), so same-named funcs would currently collide silently.
 > Grouping-by-JS-name with the tiered dispatcher (and the tier-3 diagnostic) is phase-2 work; the
 > safe interim is to **reject** a duplicate JS name outright until the dispatcher lands.
+
+### Function signature surface
+
+The validation and overload rules above assume a parameter/return shape the binding can decode.
+This is the boundary of what `@JS func` accepts, and what each non-accepted shape does.
+
+**Accepted vs. rejected parameter shapes.** The macro decodes positional arguments by static
+type, so a shape it can't reduce to "one JS value per position, of an `AnyArgument` type" is a
+**compile-time diagnostic**, not a silent miscompile:
+
+| shape | status | rationale |
+| --- | --- | --- |
+| `T` where `T: AnyArgument` (the asserted boundary types) | accepted | the decode path (primitive accessor or `getDynamicType().cast`) |
+| `T?` / `T = default` | accepted | the omittable-arg rule (arity range + per-arity branch) |
+| closure param `(@escaping (A...) -> R)` | accepted (new, see below) | synthesized JS-function wrapper |
+| `T...` (variadic) | rejected | JS has no variadic ABI; author writes `[T]` and spreads in JS |
+| `inout T` | rejected | no JS aliasing of a native slot to write back through |
+| generic `<T>` / opaque `some P` param | rejected | no concrete type at expansion time to pick a converter |
+| multiple argument labels (`f(x y: Int)`) | accepted | the JS call is positional; the internal label is irrelevant to binding |
+| `rethrows` | accepted (treated as `throws`) | the binding always allows a throw |
+
+The first cut may start narrower (reject closures, land them later); the table is the **target**
+surface, and every "rejected" row is an explicit diagnostic naming the offending parameter.
+
+**Closure / callback arguments.** A JS function passed as an argument is a real need (a
+completion callback, a comparator) that the **DSL can't express today** — closures aren't in
+`AnyArgument` (`AnyArgument.swift`), so DSL modules fall back to taking a raw `JavaScriptValue`
+and calling it by hand. Because the macro binds the real function, it can decode a
+function-typed parameter into a Swift closure that wraps the incoming `JavaScriptFunction`
+(`JavaScriptFunction.call(arguments:)`, `JavaScriptFunction.swift:37`): each Swift call encodes
+its args to JS, invokes the JS function, decodes the result. Semantics that must be spelled out,
+because they differ from a plain value:
+
+- **Thread:** the JS function can only be invoked on `@JavaScriptActor` (the runtime thread).
+  A closure called **synchronously**, before the host function returns, is already on that
+  thread. A closure **stored and called later** (hence `@escaping` required) must hop back to
+  the JS thread; calling it off-thread is a programming error the wrapper should trap, not
+  silently cross.
+- **Lifetime:** the wrapper holds the `JavaScriptFunction` **strong** (it's the only thing
+  keeping the JS callable reachable), so a stored `@escaping` callback pins it until the Swift
+  side drops the closure — the same retention reasoning as `@Event` (see [events](#events)).
+- **Types:** the closure's own parameters/return must themselves be `AnyArgument`-convertible
+  (they go through the same encode/decode); an `async` closure return maps to awaiting a JS
+  promise. A non-`@escaping`, synchronously-invoked callback is the simple case and a good first
+  cut; `@escaping` storage is the part that needs the lifetime/thread guarantees above.
+
+**Errors to JS.** A thrown Swift `Exception` crosses the JSI boundary via
+`forwardingSwiftErrorsToJS` (`ErrorHandling.swift:28`) into a JS `Error` carrying **`message`**
+(the exception's `reason`) and a **`code`** property (`JavaScriptError.swift:21`); the Swift
+cause chain is folded into the message text, not a structured `cause`. A **sync** `@JS func`
+throws that error **synchronously** at the JS call site; an **async** one **rejects its promise**
+(`AsyncFunctionDefinition.swift:123`). The arg-validation errors from the section above ride the
+same channel: `InvalidArgsNumberException` and `ArgumentCastException` reach JS as ordinary
+`Error`s, with the **argument index and expected type baked into the message string**
+(`"The 2nd argument cannot be cast to type String"`, `JavaScriptUtils.swift:66`), not as separate
+JS-visible fields. The binding's job is just to *throw the right core exception*; the boundary
+forwarding and the JS-Error shape are core's, kept identical to the DSL path so error handling in
+JS doesn't change between the two.
 
 ### Proof of concept: `@OptimizedFunction`
 
