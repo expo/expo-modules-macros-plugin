@@ -6,11 +6,13 @@ import SwiftSyntaxMacros
  Macro applied to a module class. It plays three roles, each implemented in its own
  extension below:
 
- - `MemberMacro`: scans the class body for `@JS`-marked declarations and synthesizes a
-   framework-internal `_synthesizedDefinition()` returning `[AnyDefinition]`, which
-   `expo-modules-core` calls automatically and merges into the module's definition. When
-   the class doesn't already inherit `Module`/`BaseModule`, it also synthesizes the
-   `appContext` storage and `init(appContext:)` those base classes would have provided.
+ - `MemberMacro`: binds `@JS`-marked members directly into the module's JS object via the
+   synthesized `_decorateModule`, and emits the resolved module name as a non-optional
+   `_jsName` static (no `Name(…)` DSL element). It also synthesizes a
+   framework-internal `_synthesizedDefinition()` returning `[AnyDefinition]` (now carrying
+   only nested `classes` entries) that `expo-modules-core` merges into the module's
+   definition. When the class doesn't already inherit `Module`/`BaseModule`, it also
+   synthesizes the `appContext` storage and `init(appContext:)` those base classes provide.
  - `MemberAttributeMacro`: stamps `@JavaScriptActor` on `@JS` sync members and
    `@ModuleDefinitionBuilder` on a `definition()` method.
  - `ExtensionMacro`: adds the `AnyModule` conformance when the class doesn't inherit it.
@@ -39,8 +41,12 @@ public struct ExpoModuleMacro: MemberMacro {
       throw MacroExpansionErrorMessage("@ExpoModule can only be applied to a class")
     }
 
+    // The module name is fully resolved here (the explicit `@ExpoModule("…")` argument, else the
+    // class name) and emitted as a non-optional `_jsName` static below — so the
+    // macro no longer emits a `Name(…)` DSL entry. Core reads the static for the module name,
+    // ahead of its type-name fallback (which then only applies to non-macro DSL modules).
     let moduleName = jsNameArgument(of: node) ?? classDecl.name.text
-    var entries: [String] = ["Name(\"\(moduleName)\")"]
+    var entries: [String] = []
 
     // `@JS func`s (sync and async) and `@JS var`s are bound directly into the JS object by the
     // synthesized `_decorateModule` rather than described with a `Function(...)` / `Property(...)`
@@ -67,10 +73,20 @@ public struct ExpoModuleMacro: MemberMacro {
       }
     }
 
-    let lines = entries.map { "    \($0)" }.joined(separator: ",\n")
-    let body = "  return [\n\(lines)\n  ]"
+    let body: String
+    if entries.isEmpty {
+      body = "  return []"
+    } else {
+      let lines = entries.map { "    \($0)" }.joined(separator: ",\n")
+      body = "  return [\n\(lines)\n  ]"
+    }
 
     var emitted: [DeclSyntax] = []
+
+    // The fully-resolved module name as a non-optional stored constant. Core reads this
+    // instead of the retired `Name(…)` DSL element; it feeds both native registration and the
+    // JS object name, so they can't diverge.
+    emitted.append("public static let _jsName = \"\(raw: moduleName)\"")
 
     // `Module`/`BaseModule` already provide `appContext` storage and the
     // `init(appContext:)` requirement, so we only synthesize them for classes that

@@ -298,9 +298,10 @@ struct ExpoModuleClassesTests {
       expandedSource: """
         final class MyModule: Module {
 
+          public static let _jsName = "MyModule"
+
           public func _synthesizedDefinition() -> [AnyDefinition] {
             return [
-              Name("MyModule"),
               Cache._synthesizedClassDefinition(),
               UserSession._synthesizedClassDefinition()
             ]
@@ -325,9 +326,10 @@ struct ExpoModuleClassesTests {
           @JavaScriptActor
           func ping() -> String { "pong" }
 
+          public static let _jsName = "CustomName"
+
           public func _synthesizedDefinition() -> [AnyDefinition] {
             return [
-              Name("CustomName"),
               Cache._synthesizedClassDefinition()
             ]
           }
