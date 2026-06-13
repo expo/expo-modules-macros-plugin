@@ -1037,13 +1037,59 @@ positional). `f(a: Int, b: String? = nil)` emits `guard (1...2).contains(argumen
 `f(a: Int, b: Int = 5, c: String? = nil)` emits `guard (1...3).contains(...)`, and at
 `received == 1` it calls `self.f(a: arg0)` (Swift fills `b`, `c` is its own `nil` default).
 
-The cost: a defaulted arg can't be threaded through one static call expression — when it may
-or may not be present, the binding **branches on `arguments.count`** and emits one
-`self.f(...)` shape per valid arity (decoding only the args that are present in that branch).
-Pure-`Optional` ranges don't need this (the omitted slot is just `nil`); only **defaults**
-force the per-arity call shapes. This is the macro doing at compile time what a closure
-fundamentally cannot: respecting author-written default expressions instead of forcing every
-optional-with-a-default down to `nil`.
+The cost: an omitted arg can't be threaded through one static call expression, so when a
+trailing slot may or may not be present the binding **branches on `arguments.count`** and emits
+one `self.f(...)` shape per valid arity, decoding only the slots present in that branch. This
+branch is needed for the **whole omittable trailing run**, optional or defaulted — not just
+defaults — because the buffer is exactly JS-arity-sized and **`arguments[i]` traps out of
+bounds** (`JavaScriptValuesBuffer.swift:67`); there's no missing-slot padding like core's DSL
+path does (`SyncFunctionDefinition.swift:170`). Within a branch, a **defaulted** omitted param
+drops its label from the call (Swift applies the default) and an **optional** omitted param is
+passed `nil`. The decode of each *present* slot is identical across arities (args are
+positional), so only the call expression multiplies, not the whole body: decode the **required
+prefix** once, then `switch` on the count. For
+
+```swift
+@JS func resize(width: Int, height: Int = 100, mode: String? = nil) -> Bool
+//              required          default            optional-no-default
+//   required = 1, max = 3
+```
+
+the body is:
+
+```swift
+object.setProperty("resize") { [weak appContext, self] this, arguments in
+  guard let appContext else { throw Exceptions.AppContextLost() }
+  // required/max range; `height` is defaulted and `mode` optional, so the floor is 1
+  guard (1...3).contains(arguments.count) else {
+    throw InvalidArgsNumberException((received: arguments.count, expected: 3, required: 1))
+  }
+  // required prefix: always present, decoded once
+  let width = try arguments[0].asInt()
+  // one call per arity. Each branch only touches the slots that branch actually has, so no
+  // `arguments[i]` reads past `count`. Omitted `height` drops its label (Swift applies =100);
+  // omitted `mode` is passed `nil`.
+  let result: Bool
+  switch arguments.count {
+  case 1:
+    result = self.resize(width: width)                       // height = 100, mode = nil
+  case 2:
+    let height = try arguments[1].asInt()
+    result = self.resize(width: width, height: height, mode: nil)
+  default: // 3
+    let height = try arguments[1].asInt()
+    let mode = try (String?).getDynamicType().cast(jsValue: arguments[2], appContext: appContext) as! String?
+    result = self.resize(width: width, height: height, mode: mode)
+  }
+  return result.toJavaScriptValue(in: runtime)
+}
+```
+
+The `switch` collapses to a single call only when the trailing run is empty (every param
+required): then `required == max`, the range guard becomes the exact-count check, and the body
+is the flat decode-all-then-call shown in the earlier `add` example. The moment any trailing
+param is omittable — optional **or** defaulted — the per-arity branch is required, since the
+binding can't index a slot the caller didn't pass.
 
 > **Gap (shipped vs. target).** The current codegen (`DecorateModuleBuilder.swift:47–70`)
 > emits an **exact** `arguments.count == <total>` check, throws an ad-hoc
@@ -1056,9 +1102,10 @@ optional-with-a-default down to `nil`.
 **2. `null` / `undefined` map by the parameter's static optionality.** Both JS `null` and
 `undefined` decode to `nil` for an `Optional<T>` parameter (`DynamicOptionalType.swift:26–31`),
 and to a thrown `NullCastException<T>` for a required non-optional one
-(`Conversions.swift:328`, e.g. `DynamicBoolType.swift:17`). The macro decodes optional params
-through the dynamic-optional converter (which already encodes this), so it inherits that
-behavior rather than re-implementing the `null`/`undefined`/missing trichotomy.
+(`Conversions.swift:328`, e.g. `DynamicBoolType.swift:17`). For a **present** slot the macro
+decodes optional params through the dynamic-optional converter (which already encodes the
+`null`/`undefined` → `nil` mapping), so it inherits that behavior; an **absent** slot is handled
+by point 1's per-arity branch, not the converter.
 
 **Omission** (a trailing slot the arity range allows to be absent) is resolved by point 1, not
 here: a defaulted param's slot is left out of the call so Swift applies the default; an
