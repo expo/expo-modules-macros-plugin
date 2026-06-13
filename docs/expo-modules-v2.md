@@ -93,7 +93,10 @@ question of whether `@JS struct`/`@JS enum` should be an error redirecting to
    `@OptimizedFunction` is dropped.
 3. **[TypeScript type generation](#phase-3--typescript-type-generation)** — generate
    the module's `.d.ts` (functions, records, view props + event callbacks) from the
-   annotated Swift source, so JS types always match native.
+   annotated Swift source, so JS types always match native. A **SwiftSyntax extractor**
+   reads the declarations (types are written on the `@JS`/`@Record`/`@ViewProps`
+   declaration, so no type resolution is needed) and feeds `expo-type-information`'s
+   existing TS emitter, replacing its SourceKitten front end.
 
 Phase 1 produces a correct, complete surface on the existing runtime; phase 2 swaps
 the *implementation strategy* underneath the same author-facing API for speed; phase 3
@@ -905,9 +908,12 @@ public func _decorateModule(object: borrowing JavaScriptObject,
     guard let appContext else {
       throw Exceptions.AppContextLost()
     }
-    // 1. static arity check — count known at expansion time
+    // 1. static arity check. The required and maximum counts are both known at expansion time
+    //    (here both 2 — neither param is optional), so this is a literal range check, no
+    //    definition lookup. With trailing optionals the lower bound drops (see Argument
+    //    validation, below). Mirrors core's `validateArgumentsNumber` / `InvalidArgsNumberException`.
     guard arguments.count == 2 else {
-      throw Exception(name: "InvalidArgumentCount", description: "Function 'add' expects 2 argument(s), but got \(arguments.count)")
+      throw InvalidArgsNumberException((received: arguments.count, expected: 2, required: 2))
     }
     // 2. per-argument decode by static type — no [Any], no toTuple. Primitives use a direct
     //    typed accessor (`asDouble()`, validating + throwing); other types fall back to
@@ -995,6 +1001,61 @@ Notes:
   ownership, so it borrows rather than `inout` (no rebinding) or `consuming` (caller keeps using
   it). Same convention core uses (`ObjectDefinition.swift:97`).
 
+### Argument validation
+
+The generated binding must reproduce the **same validation semantics** the DSL path gives
+today, just emitted inline instead of derived at call time. Today arity is validated
+centrally (`validateArgumentsNumber`, `JavaScriptUtils.swift:12`) and per-argument type
+conversion is decentralized across the dynamic-type converters (coordinated by
+`MainValueConverter`, wrapping failures in `ArgumentCastException`). The macro keeps that
+behavior; it just hoists the arity check into the closure and selects each converter
+statically. The four pieces:
+
+**1. Arity is a range, not an exact count.** A trailing run of `Optional<T>` parameters may
+be omitted, so core computes a **required** count (total minus the number of *trailing*
+optionals) and a **maximum** (total), then rejects `received < required || received > max`
+(`SyncFunctionDefinition.swift:55–76`, `JavaScriptUtils.swift:16`). The macro knows both
+numbers at expansion time and emits the same range check. A non-trailing optional does
+**not** lower the required count — only a contiguous trailing run does, because arguments
+are positional. The example above checks `== 2` only because both params are required
+(required == max); for `@JS func f(a: Int, b: String? = nil)` it would emit
+`guard (1...2).contains(arguments.count)`. The thrown error is core's
+`InvalidArgsNumberException((received:expected:required:))`, not an ad-hoc `Exception`.
+
+> **Gap (shipped vs. target).** The current codegen (`DecorateModuleBuilder.swift:47`)
+> emits an **exact** `arguments.count == <total>` check and throws an ad-hoc
+> `Exception(name: "InvalidArgumentCount", …)`. That over-rejects a legitimately-omitted
+> trailing optional and diverges from the DSL'"'"'s error type. Moving to the required/max
+> range and `InvalidArgsNumberException` is part of completing phase 2.
+
+**2. `null` / `undefined` map by the parameter's static optionality.** Both JS `null` and
+`undefined` decode to `nil` for an `Optional<T>` parameter (`DynamicOptionalType.swift:26–31`),
+and to a thrown `NullCastException<T>` for a required non-optional one
+(`Conversions.swift:328`, e.g. `DynamicBoolType.swift:17`). An **omitted** trailing argument
+(allowed by the arity range) is treated as `nil` — the same as passing `undefined` — so it
+only type-checks when the Swift param is optional. The macro decodes optional params through
+the dynamic-optional converter (which already encodes this), so it inherits the behavior
+rather than re-implementing the `null`/`undefined`/missing trichotomy.
+
+**3. Type mismatches throw a typed, index-bearing error.** A primitive fast-path accessor
+(`asInt()`/`asDouble()`/`asString()`/`asBool()`) throws a conversion error on a kind mismatch
+(`Conversions.swift:251`); the dynamic fallback throws `CastingException` /
+`ConversionToNativeFailedException` (`Conversions.swift:275`). To match the DSL'"'"'s diagnostics,
+each generated decode is wrapped so the failure carries the **argument index** and expected
+type, the way core'"'"'s `ArgumentCastException((index:type:))` does (`JavaScriptUtils.swift:63`).
+Because the decode runs inside the host-function closure, the throw propagates out as the
+function'"'"'s result: a **sync** function surfaces it as a thrown JS error, an **async** one as a
+promise rejection (the closure'"'"'s `async`-ness selects the rejecting overload). The first
+failing argument short-circuits the rest.
+
+**4. What'"'"'s inline vs. borrowed from core.** Arity and the encode/decode calls are emitted
+**inline** in the closure (that'"'"'s the point of phase 2: no per-call definition walk). The
+*converters themselves* are not re-implemented — primitives use the validating
+`JavaScriptValue` accessors and everything else calls the existing public
+`T.getDynamicType().cast(...)`, so the per-type validation rules (and their error types)
+stay in core and remain the single source of truth. The macro chooses *which* converter to
+call statically; core still defines *what* each converter accepts.
+
 ### Proof of concept: `@OptimizedFunction`
 
 `@OptimizedFunction` (`ExpoModulesOptimizedMacro.swift`,
@@ -1059,34 +1120,224 @@ runtime conformance — it doesn't need the code to compile or link. Open design
 how view-props events map to TS callback signatures (payload `Record` → TS object), how
 `AnyArgument` payload types resolve to TS, and optional/required field mapping.
 
-### Reuse `expo-type-information`
+### Approach: a SwiftSyntax extractor feeding `expo-type-information`'s emitter
 
-**The pipeline already exists** — the `expo-type-information` package
-(`packages/expo-type-information`) parses Swift Expo modules and emits TypeScript today.
-Phase 3 is **adapting it to the new macro surface**, not building a generator from
-scratch.
+**Decision: replace the front end (parser), keep the back end (TS emitter).** The
+`expo-type-information` package (`packages/expo-type-information`) is two cleanly
+separated halves joined by one model:
 
-What it already does:
-- **Parses Swift modules for type info via `sourcekitten`** (SourceKit-backed, so it has
-  *resolved* types, not just syntax; macOS-only, needs the `sourcekitten` tool).
-- **Emits TypeScript** — types, wrapper functions, and mocks
-  (`typescriptGeneration.ts`, `mockgen.ts`).
-- Ships CLI commands that already line up with our surface:
-  `inlineModulesInterfaceCommand`, `moduleInterfaceCommand`, `generateModuleTypesCommand`,
-  `generateViewTypesCommand`, and `generateJSXIntrinsicsCommand` (view JSX intrinsics ≈
-  our `@ViewProps`).
+- **Front end** — `swift/sourcekittenTypeInformation.ts` shells out to the `sourcekitten`
+  CLI (`sourcekitten structure --file`, plus `source.request.cursorinfo` byte-offset
+  requests) and folds the result into a typed model in `typeInformation.ts`
+  (`Type`/`RecordType`/`EnumType`/`ModuleClassDeclaration`/`FunctionDeclaration`/…).
+- **Back end** — `typescriptGeneration.ts` consumes that model through a
+  `GenerationContext { fileInfo, module, view, missingTypes }` (`typescriptGeneration.ts:57`)
+  and emits `.d.ts` via the TypeScript factory API; `mockgen.ts` emits mocks. It never
+  touches SourceKitten — it only sees the model. The CLI commands
+  (`generateModuleTypesCommand`, `generateViewTypesCommand`, `generateJSXIntrinsicsCommand`,
+  `moduleInterfaceCommand`, …) sit on top.
 
-So phase 3 work is mostly **teaching it the new attributes** — `@JS` (incl. `async` →
-`Promise`), `@Record`/field-by-default + requiredness inference, `@ViewProps` (value
-props vs. function-typed events), `@ExpoView`, `@Union`, `@Event` — and mapping each to
-the right TS shape (e.g. `@ViewProps` → component-props type with event callbacks;
-`@Union` → `A | B | C`; optional/default → optional TS field).
+Phase 3 swaps the **front end** for a SwiftSyntax extractor and reuses the back end
+verbatim. The seam is the `FileTypeInformation` model (`typeInformation.ts:255`): produce
+that, and the entire emitter + CLI + mock pipeline works unchanged.
 
-Note: it uses **SourceKitten**, not SwiftSyntax (which the phase-1/2 macros and the
-sandbox discussion assume). That's fine for an external tool — SourceKitten gives
-resolved types, which can be *more* than enough — but it's a different front end than the
-macros use. Open: whether to keep SourceKitten or move the parser to SwiftSyntax for
-consistency with the macro toolchain.
+**Why SwiftSyntax, not SourceKit, for the v2 surface.** The current SourceKitten front
+end exists to buy *type resolution* the DSL doesn't write down. `Property("ready") {
+self.ready }` has no annotation anywhere — the type only exists after `self.ready` is
+resolved — so the tool falls back to a `cursorinfo` request at a byte offset, which its
+own comments flag as *"extremely slow and inefficient"* / *"really costly"*
+(`sourcekittenTypeInformation.ts:315,352`). It even ships a `PREPROCESS_AND_INFERENCE`
+mode (`typeInformation.ts:352`) that **rewrites the source to inject `return`s** so
+SourceKit will report a closure's type. All of that is a workaround for *types living
+inside result-builder closures*.
+
+The v2 macro surface puts the type back **on the declaration**, by design ("the signature
+is the contract"):
+
+```swift
+@JS func add(a: Double, b: Double) -> Double { a + b }   // params + return are written
+@JS var ready: Bool = false                              // type written
+@Record struct Options { var name: String; var count: Int = 0 }   // fields written
+@Union enum Media { case url(URL); case data(Data) }     // case payloads written
+```
+
+Every type the generator needs is now **lexically present**, so the expensive thing
+SourceKit provided is no longer required for the common case. That flips the front-end
+choice:
+
+- **One front end for the whole toolchain.** The phase-1/2 macros are already SwiftSyntax
+  (`ExpoModulesMacros` depends on `swift-syntax` 602.x; `JSMacro.swift`, `RecordMacro.swift`,
+  `EventMacro.swift`, `MacroHelpers.swift`). A SwiftSyntax extractor reuses the *same*
+  classification logic the macros use — "is this property an event or a value prop?" is the
+  same `member.type.is(FunctionTypeSyntax.self)` check `@ViewProps` makes at expansion time —
+  instead of maintaining a second, divergent parser.
+- **No SDK / compile / cursor dependency.** SourceKitten needs `sourcekitd`, an SDK path, and
+  per-file compiler args (`-sdk`, `-target arm64-apple-ios7` are hardcoded,
+  `sourcekittenTypeInformation.ts:337`). SwiftSyntax parsing needs *only the source text* —
+  exactly what the plan already wants ("doesn't need the code to compile or link"). It runs on
+  Linux/CI, not just macOS.
+- **Faster and deterministic.** The slow `cursorinfo`/preprocess path disappears because there's
+  nothing to resolve. Parsing a package's module files is milliseconds and byte-identical every
+  run (so the golden-file tests stay stable).
+
+**Shape of the extractor.** A small **SwiftPM executable** (`ExpoTypeGen`) lives in the
+macros package alongside the macro target, depends on `SwiftSyntax` + `SwiftParser`, and
+shares the `@JS`/`@ViewProps`/`@Record` classification helpers with the macro target (one
+source of truth for "what is an event," "what is a field," requiredness inference). It
+walks each file's syntax and emits the **`FileTypeInformationSerialized` JSON**
+(`typeInformation.ts:239`, already a defined wire format with
+`serialize`/`deserializeTypeInformation`). `expo-type-information` shells out to that
+binary instead of `sourcekitten`, `deserializeTypeInformation`s the JSON, and runs the
+existing emitter. Same packaging story as the committed macro plugin binary
+(`ExpoModulesMacros-tool`): ship a prebuilt `ExpoTypeGen` the JS package invokes.
+
+Mapping each attribute onto the existing model (no new emitter concepts needed):
+`@JS func`/`async` → `FunctionDeclaration`/`asyncFunctions` (async → `Promise<…>`, already
+handled by the `asyncModifier` path); `@Record`/`@ViewProps` value fields → `RecordType` +
+`Field` with requiredness from the declaration (default value / `?`); `@ViewProps`
+function-typed fields → the `props`/event-callback path (`PropDeclaration`); `@Union` →
+`SumType` (`A | B | C`); `@Event` → the module `events` list + a callback type from its
+payload; `@ExpoView` → the view/JSX-intrinsics path (`generateViewTypesCommand` /
+`generateJSXIntrinsicsCommand`).
+
+### The inference gap, and why it's small
+
+SwiftSyntax sees only *what's written*. It cannot resolve a type the author left to the
+compiler. The cases, and how each is handled:
+
+- **`func` with no `->` is `Void` — not a gap.** Swift does **not** infer a named
+  function's return type from its body. `@JS func add(...) { a + b }` returns `Void` (the
+  `a + b` is a discarded expression — `warning: result of operator '+' is unused`), and
+  `@JS func add(...) { return a + b }` is a hard **compile error** (`error: unexpected
+  non-void return value in void function`), so it never reaches the generator.
+  Single-expression *return* inference is a **closure-only** feature; it never applies to a
+  `func`. So the absence of `->` is unambiguously `Void` in SwiftSyntax — no resolution
+  needed. (This is the one place the old tool's preprocess-inject-`return` trick was load-bearing
+  for the *DSL*, because there the body **was** a closure; it's moot for `@JS func`.)
+- **Un-annotated property initializers — the real gap.** `@JS var ready = false`,
+  `@Record`/`@ViewProps` `var name = makeDefault()`, `var tags = ["a", "b"]` have the type
+  only in the initializer. **Decision: require an explicit type at the JS boundary** — a
+  `@JS`/`@Record`/`@ViewProps` stored property without a `typeAnnotation` is a **macro
+  diagnostic with a fix-it** ("annotate the type: `var ready: Bool = false`"). This is cheap
+  (the macros already emit diagnostics, e.g. `@Event let`→`var`), keeps the generator
+  pure-syntax with no SDK/compile dependency, and only constrains the *exported* surface —
+  where being explicit is reasonable anyway and is consistent with the plan already
+  legislating requiredness from the declaration shape. A literal-initializer fallback
+  (`= false`→`Bool`, `= "x"`→`String`, `= 0`→`Int`) can resolve the easy cases *if* we'd
+  rather not diagnose, but `= someCall()` is unrecoverable, so the diagnostic is the primary
+  path and literal resolution at most a convenience.
+- **Cross-file type identity — resolved by name, not by a type checker.** Knowing a
+  `@Union` case payload `MediaConfig` is a `@Record` defined in another file is the same
+  problem the tool already solves: it builds a `typeIdentifierDefinitionMap`
+  (`typeInformation.ts:276`) and tracks `missingTypes` (`GenerationContext.missingTypes`).
+  Run the extractor over all files first to collect every `@Record`/`@Union`/`@SharedObject`
+  name, then resolve references by exact name in a second pass — no resolution needed,
+  because the names match exactly.
+
+**SourceKit as an optional last resort, not the default.** If we decide *not* to diagnose
+un-annotated properties, the existing SourceKitten `cursorinfo` path can stay as a fallback
+*scoped to just the un-annotated remainder* — but it reintroduces the SDK/compile
+dependency this phase avoids, so the diagnostic-first path is preferred and SourceKit is
+kept (if at all) only behind a flag.
+
+### Staging
+
+1. **Extractor MVP.** `ExpoTypeGen` SwiftPM executable in the macros package; walk
+   functions + records, emit `FileTypeInformationSerialized` JSON for a single file; golden
+   test against the existing model shape.
+2. **Wire into `expo-type-information`.** Add a SwiftSyntax-backed front end that shells out
+   to `ExpoTypeGen` and `deserializeTypeInformation`s the JSON, selectable alongside the
+   SourceKitten one; run the *existing* emitter unchanged. Prove the `.d.ts` matches on a
+   real module.
+3. **Full attribute coverage.** `@ViewProps` (value props vs. function-typed events),
+   `@ExpoView`/JSX intrinsics, `@Union`, `@Event` payload callbacks, `async` → `Promise`,
+   requiredness inference. Add the un-annotated-property diagnostic to the macros.
+4. **Cut over.** Make the SwiftSyntax front end the default; retire
+   `sourcekittenTypeInformation.ts` and the `cursorinfo`/`PREPROCESS_AND_INFERENCE` path
+   (or demote SourceKit to an optional fallback per above).
+
+### When generation runs, and the source of truth
+
+`expo-type-information` is a **standalone CLI today, invoked by nothing in the build** —
+no autolinking step, prebuild hook, or `et` command runs it; it's a manual/experimental
+generator. Phase 3 has to decide where it plugs in, because that choice shapes packaging,
+CI, and drift handling. Two models:
+
+- **Committed output (preferred).** `.d.ts` is generated and **checked in** next to the
+  module, exactly like the macro plugin's build output and the JS `build/` output this repo
+  already commits (`et check-packages` rebuilds and stages it). Authors and consumers never
+  need the Swift toolchain to *use* a module; only re-generating needs it. Fits the existing
+  "stage source + regenerated output together" discipline.
+- **Generate-at-build.** A prebuild/autolinking step runs `ExpoTypeGen` and writes `.d.ts`
+  into a build dir. Always fresh, but couples every consumer build to the Swift toolchain +
+  `ExpoTypeGen` binary and complicates Metro/TS resolution. Heavier; not preferred for v1.
+
+**Lean: committed output**, regenerated by an `et` command (e.g. folded into
+`et check-packages` for modules that opt in), matching how built JS lands in `build/`.
+
+### Drift enforcement
+
+If `.d.ts` is committed it can rot against the Swift source. Guard it the same way the JS
+`build/` output is guarded: a **CI check regenerates and diffs** — fail if the working tree
+`.d.ts` differs from a fresh `ExpoTypeGen` run (`et check-packages`-style "you forgot to
+rebuild"). Determinism is what makes this viable: SwiftSyntax parsing is byte-identical per
+run (unlike the old async SourceKitten path, which sorted by `definitionOffset` to *recover*
+determinism — `DefinitionOffset`, `typeInformation.ts:153`), so the diff is signal, not
+noise.
+
+### The hand-written-wrapper boundary
+
+Generated `.d.ts` types the **native surface** — what `requireNativeModule("Foo")` returns.
+Real modules then hand-write a TS `index.ts` that wraps that surface for JS ergonomics
+(re-exports, defaults, convenience overloads). **Decision: Phase 3 generates the native
+interface (the `requireNativeModule` return type + record/union/view-props types) that
+authors import and re-export/wrap; it does not replace the hand-written wrapper.** The tool
+already distinguishes these (`moduleInterfaceCommand` / `inlineModulesInterfaceCommand` /
+`generateModuleTypesCommand`); v1 targets the typed native interface, leaving the wrapper to
+the author. Generating or linting the wrapper is a follow-up (see Further ideas).
+
+### Platform-neutral model (Android/KSP parity)
+
+The `FileTypeInformation` model is **platform-neutral** — it describes the JS-facing surface
+(functions, records, unions, view props, events), not Swift specifics. So the Android KSP
+path (`expo-modules-v2-android.md`) can emit the *same* JSON model from Kotlin annotations and feed the
+*same* TS emitter, giving one set of `.d.ts` for both platforms. Phase 3 ships Apple-only,
+but the extractor's output contract (`FileTypeInformationSerialized`) is the shared
+interface — keep it free of Swift-only concepts so KSP can target it unchanged.
+
+### `AnyArgument` → TypeScript mapping
+
+The non-obvious cases the extractor must map (primitives are trivial; these are the ones
+that bite). Mirrors the requiredness tables above:
+
+| Swift | TypeScript | Note |
+|---|---|---|
+| `String` / `Bool` / `Int` / `Double` | `string` / `boolean` / `number` | `Int` and `Double` both → `number` |
+| `T?` | `T \| null` | optional *and* nullable (see requiredness tables) |
+| `[T]` | `T[]` | |
+| `[K: V]` | `Record<K, V>` | |
+| `Data` / `Uint8Array` typed arrays | `Uint8Array` | `ArrayBuffer` for raw `Data` — confirm against core's converter |
+| `@Record S` | `S` (generated object type) | fields with inferred requiredness |
+| `@Union enum` / `Either<A,B>` | `A \| B \| C` | from case payloads / type args |
+| `@SharedObject C` | `C` (generated class type) | reference type, by name |
+| `JavaScriptObject` / `JavaScriptValue` | `object` / `unknown` | escape hatch; confirm |
+| `JavaScriptFunction` / `() -> Void` | function type | `@Event`/view-callback payloads → typed callback |
+| `Promise` / `async ->` | `Promise<T>` | async return wrapping |
+| `URL` | `string` | |
+| `Date` | `Date` or `string`? | **open** — confirm against core's `Date` converter |
+
+Open: `Data` (`Uint8Array` vs `ArrayBuffer`) and `Date` (`Date` vs ISO `string`) must match
+what core's converters actually produce at runtime — pin against the converter, not guessed.
+
+### Verification
+
+Matching the discipline of phases 1–2 (expansion-shape tests don't prove integration):
+**generate `.d.ts` for existing real modules — expo-video, expo-image — and diff against
+their hand-written types.** Those hand-maintained types are the ground truth; a generated
+file that matches (modulo wrapper ergonomics) proves the extractor + mapping are correct on a
+real surface, not just fixtures. State this in the PR. Unit-level: golden-file tests on the
+`FileTypeInformationSerialized` JSON per attribute (the existing test style,
+`tests/typeInformation.test.ts`).
 
 ---
 
@@ -1321,9 +1572,13 @@ before committing); each new impl struct → add to `providingMacros` in `Plugin
    signatures, and whether conversion failures throw or swallow + warn (the macro assumes
    non-throwing). The `@Event("customName")` name override is in scope for v1 (verbatim,
    no `on`-stripping).
-6. **Phase 3 front end** — `expo-type-information` already parses Swift modules (via
-   SourceKitten) and emits TS; phase 3 adapts it to the new attributes. Open: keep
-   SourceKitten or move to SwiftSyntax for consistency with the macro toolchain.
+6. **Phase 3 front end — decided: SwiftSyntax extractor (`ExpoTypeGen`) feeding
+   `expo-type-information`'s existing TS emitter** (the model at `typeInformation.ts:255`
+   is the seam; the back end is reused verbatim). SourceKitten is retired (or demoted to an
+   optional fallback for un-annotated properties). Remaining open: whether to fully drop the
+   `cursorinfo`/`PREPROCESS_AND_INFERENCE` path or keep it behind a flag, and whether an
+   un-annotated `@JS`/`@Record`/`@ViewProps` property is a hard diagnostic or gets a
+   literal-initializer fallback. See [Phase 3](#approach-a-swiftsyntax-extractor-feeding-expo-type-informations-emitter).
 7. **`@JS struct` / `@JS enum`** — `@JS` is member-only today (funcs/properties/inits); a
    nested `struct`/`enum` is a silent no-op. Either **error and redirect** to
    `@Record`/`@Union`, or **accept as an alias** for them (the JavaScriptKit-familiar
