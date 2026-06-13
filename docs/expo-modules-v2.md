@@ -1135,6 +1135,81 @@ failing argument short-circuits the rest.
 stay in core and remain the single source of truth. The macro chooses *which* converter to
 call statically; core still defines *what* each converter accepts.
 
+### Overloaded functions
+
+Swift lets two `@JS func`s share a name; JS does not — one property holds one function. So N
+`@JS func`s with the same **JS name** can't each `setProperty(jsName)` (the last would silently
+win). Supporting overloads means collapsing them into **one** host function that dispatches at
+call time over the only things JS exposes at runtime: `arguments.count` and each argument's
+**JS kind** (`JavaScriptValue.Kind` + the `isArray()`/`isFunction()`/`isTypedArray()` object
+refinements — `JavaScriptValue.swift:521`, `:121`). The macro groups the funcs by JS name and,
+for each group of size > 1, emits a dispatcher instead of one binding per func. There are three
+tiers, by how cleanly the candidates separate:
+
+**1. Arity-disjoint — always supported.** Candidates whose accepted arity *ranges* (point 1,
+including defaults/optionals) don't overlap dispatch purely on `arguments.count`. This is the
+per-arity `switch` already in hand, except each branch calls a *different Swift function* rather
+than a different default-fill of one:
+
+```swift
+@JS func at(_ i: Int) -> Element        // arity 1
+@JS func at(_ i: Int, _ j: Int) -> Element  // arity 2
+// →
+object.setProperty("at") { [self] this, arguments in
+  switch arguments.count {
+  case 1: let i = try arguments[0].asInt(); return self.at(i).toJavaScriptValue(in: runtime)
+  case 2: let i = try arguments[0].asInt(); let j = try arguments[1].asInt()
+          return self.at(i, j).toJavaScriptValue(in: runtime)
+  default:
+    throw InvalidArgsNumberException((received: arguments.count, expected: 2, required: 1))
+  }
+}
+```
+
+The macro verifies the ranges are disjoint at expansion time; an overlap falls to tier 2/3.
+
+**2. Same-arity, kind-distinguishable — supported when the deciding argument's JS kinds are
+disjoint.** When two candidates share an arity, the dispatcher must pick on the JS kind of the
+first argument position where their types differ. That works *only if* those types map to
+**distinct** JS kinds:
+
+```swift
+@JS func write(_ s: String) { … }   // arg0 kind: .string
+@JS func write(_ n: Double) { … }   // arg0 kind: .number
+// →  if arguments[0].isString() { … } else if arguments[0].isNumber() { … } else { throw … }
+```
+
+The macro emits the kind tests in declaration order, calls the first match, and throws an
+"`no overload of 'write' matches the arguments`" error if none do. `String`↔`number`,
+`object`↔`array` (via `isArray()`), `object`↔`function` (`isFunction()`) all separate cleanly.
+
+Scope: the first cut distinguishes on a **single** argument position (the leftmost where the
+candidates' kinds differ) and treats `null`/`undefined` at that position as matching the
+optional candidate, if any. Genuinely multi-axis resolution (several positions differing, or
+arity *and* kind interacting) is a decision tree the macro could grow into, but it is **not**
+full Swift overload resolution — anything the single-position kind test can't separate
+unambiguously is pushed to tier 3 rather than guessed.
+
+**3. Runtime-indistinguishable — compile error.** When same-arity candidates collapse to the
+**same** JS kind at every position, no dispatcher can exist and the macro emits a diagnostic
+pointing at the colliding declarations. The unsupportable cases:
+
+- `Int` vs `Double` (both `.number`), `Int` vs `CGFloat`, etc. — numeric widths are one JS kind.
+- Two different record types, or two different shared-object classes (both `.object`).
+- `[Int]` vs `[String]` (both array), `[String]` vs `Set<String>`.
+- **Return-type-only** overloads (`f() -> Int` vs `f() -> String`): identical call sites, nothing
+  to dispatch on. Always an error.
+
+The boundary is deliberately the same one core already draws elsewhere: dispatch sees JS kinds,
+not Swift types, so the macro can only honor an overload JS could itself tell apart. The check is
+purely syntactic on the declared types (a fixed Swift-type → JS-kind table), so it runs entirely
+at expansion time with a clear diagnostic, never a silent last-writer-wins.
+
+> **Status: designed, not built.** Today each `@JS func` emits its own `setProperty(jsName)`
+> (`DecorateModuleBuilder.swift:113`), so same-named funcs would currently collide silently.
+> Grouping-by-JS-name with the tiered dispatcher (and the tier-3 diagnostic) is phase-2 work; the
+> safe interim is to **reject** a duplicate JS name outright until the dispatcher lands.
+
 ### Proof of concept: `@OptimizedFunction`
 
 `@OptimizedFunction` (`ExpoModulesOptimizedMacro.swift`,
