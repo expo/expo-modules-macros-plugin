@@ -454,19 +454,6 @@ private func isExcludedByModifier(_ modifiers: DeclModifierListSyntax) -> Bool {
 }
 
 /**
- True if the type syntax is optional: `T?`, `T!`, or the spelled-out `Optional<T>`.
- */
-private func isOptionalType(_ type: TypeSyntax) -> Bool {
-  if type.is(OptionalTypeSyntax.self) || type.is(ImplicitlyUnwrappedOptionalTypeSyntax.self) {
-    return true
-  }
-  if let identifier = type.as(IdentifierTypeSyntax.self), identifier.name.text == "Optional" {
-    return true
-  }
-  return false
-}
-
-/**
  True if the type's inheritance clause already lists a protocol with the given name.
  Matches either the bare identifier (`Record`) or a qualified member access ending in
  the name (`ExpoModulesCore.Record`).

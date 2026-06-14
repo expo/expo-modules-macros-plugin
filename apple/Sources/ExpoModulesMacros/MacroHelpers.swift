@@ -31,6 +31,32 @@ internal func boolArgument(of attribute: AttributeSyntax, label: String) -> Bool
   return nil
 }
 
+/// True if the type is written as an optional: `T?`, `T!`, or the explicit `Optional<T>`. Used to
+/// decide argument requiredness (an optional parameter may be omitted) and record-field nullability.
+internal func isOptionalType(_ type: TypeSyntax) -> Bool {
+  if type.is(OptionalTypeSyntax.self) || type.is(ImplicitlyUnwrappedOptionalTypeSyntax.self) {
+    return true
+  }
+  if let identifier = type.as(IdentifierTypeSyntax.self), identifier.name.text == "Optional" {
+    return true
+  }
+  return false
+}
+
+/// True if a trailing occurrence of this parameter may be omitted by the JS caller: it either has a
+/// default value (Swift applies it) or is an optional type (an absent slot becomes `nil`). The arity
+/// range and the per-arity call branches are derived from this.
+internal func isOmittable(_ parameter: FunctionParameterSyntax) -> Bool {
+  return hasDefaultValue(parameter) || isOptionalType(parameter.type)
+}
+
+/// True if the parameter declares a default value (`b: Int = 5`). An omitted defaulted slot is left
+/// out of the call so Swift fills in the default, distinguishing it from an omitted optional slot
+/// (passed `nil`).
+internal func hasDefaultValue(_ parameter: FunctionParameterSyntax) -> Bool {
+  return parameter.defaultValue != nil
+}
+
 /**
  True if the declaration is a `@Event(sync: true)` property. A sync event dispatches inline on the
  JS thread instead of scheduling, so `@ExpoModule`/`@SharedObject` stamp it with `@JavaScriptActor`,

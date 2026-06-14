@@ -106,7 +106,7 @@ struct ExpoModuleMacroTests {
           public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
             object.setProperty("greet") { [self] this, arguments in
               guard arguments.count == 1 else {
-                throw Exception(name: "InvalidArgumentCount", description: "Function 'greet' expects 1 argument(s), but got \\(arguments.count)")
+                throw Exceptions.ArgumentsRangeMismatch((functionName: "greet", received: arguments.count, required: 1, maximum: 1))
               }
               let arg0 = try arguments.unownedValue(at: 0).asString()
               let result = self.greet(name: arg0)
@@ -143,11 +143,142 @@ struct ExpoModuleMacroTests {
           public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
             object.setProperty("add") { [self] this, arguments in
               guard arguments.count == 2 else {
-                throw Exception(name: "InvalidArgumentCount", description: "Function 'add' expects 2 argument(s), but got \\(arguments.count)")
+                throw Exceptions.ArgumentsRangeMismatch((functionName: "add", received: arguments.count, required: 2, maximum: 2))
               }
               let arg0 = try arguments.unownedValue(at: 0).asDouble()
               let arg1 = try arguments.unownedValue(at: 1).asDouble()
               let result = self.add(arg0, to: arg1)
+              return result.toJavaScriptValue(in: runtime)
+            }
+          }
+        }
+        """
+    )
+  }
+
+  @Test
+  func `Trailing defaulted parameter widens the arity range and branches the call`() {
+    assertExpansion(
+      """
+      @ExpoModule
+      final class MyModule: Module {
+        @JS
+        func resize(width: Int, height: Int = 100) -> Bool { true }
+      }
+      """,
+      expandedSource: """
+        final class MyModule: Module {
+          @JavaScriptActor
+          func resize(width: Int, height: Int = 100) -> Bool { true }
+
+          public static let _jsName = "MyModule"
+
+          public func _synthesizedDefinition() -> [AnyDefinition] {
+            return []
+          }
+
+          @JavaScriptActor
+          public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
+            object.setProperty("resize") { [self] this, arguments in
+              guard arguments.count >= 1 && arguments.count <= 2 else {
+                throw Exceptions.ArgumentsRangeMismatch((functionName: "resize", received: arguments.count, required: 1, maximum: 2))
+              }
+              let arg0 = try arguments.unownedValue(at: 0).asInt()
+              let result = switch arguments.count {
+              case 1:
+                self.resize(width: arg0)
+              default:
+                let arg1 = try arguments.unownedValue(at: 1).asInt()
+                self.resize(width: arg0, height: arg1)
+              }
+              return result.toJavaScriptValue(in: runtime)
+            }
+          }
+        }
+        """
+    )
+  }
+
+  @Test
+  func `Trailing optional parameter is passed nil when omitted`() {
+    assertExpansion(
+      """
+      @ExpoModule
+      final class MyModule: Module {
+        @JS
+        func tag(name: String, note: String?) { }
+      }
+      """,
+      expandedSource: """
+        final class MyModule: Module {
+          @JavaScriptActor
+          func tag(name: String, note: String?) { }
+
+          public static let _jsName = "MyModule"
+
+          public func _synthesizedDefinition() -> [AnyDefinition] {
+            return []
+          }
+
+          @JavaScriptActor
+          public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
+            object.setProperty("tag") { [weak appContext, self] this, arguments in
+              guard let appContext else {
+                throw Exceptions.AppContextLost()
+              }
+              guard arguments.count >= 1 && arguments.count <= 2 else {
+                throw Exceptions.ArgumentsRangeMismatch((functionName: "tag", received: arguments.count, required: 1, maximum: 2))
+              }
+              let arg0 = try arguments.unownedValue(at: 0).asString()
+              switch arguments.count {
+              case 1:
+                self.tag(name: arg0, note: nil)
+              default:
+                let arg1 = try String?.getDynamicType().cast(jsValue: arguments[1], appContext: appContext) as! String?
+                self.tag(name: arg0, note: arg1)
+              }
+              return .undefined
+            }
+          }
+        }
+        """
+    )
+  }
+
+  @Test
+  func `Only-defaulted parameters make every argument omittable (required count zero)`() {
+    assertExpansion(
+      """
+      @ExpoModule
+      final class MyModule: Module {
+        @JS
+        func ping(times: Int = 1) -> Int { times }
+      }
+      """,
+      expandedSource: """
+        final class MyModule: Module {
+          @JavaScriptActor
+          func ping(times: Int = 1) -> Int { times }
+
+          public static let _jsName = "MyModule"
+
+          public func _synthesizedDefinition() -> [AnyDefinition] {
+            return []
+          }
+
+          @JavaScriptActor
+          public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
+            object.setProperty("ping") { [self] this, arguments in
+              guard arguments.count >= 0 && arguments.count <= 1 else {
+                throw Exceptions.ArgumentsRangeMismatch((functionName: "ping", received: arguments.count, required: 0, maximum: 1))
+              }
+              let result = switch arguments.count {
+              case 0:
+                self.ping()
+              default:
+                let arg0 = try arguments.unownedValue(at: 0).asInt()
+                self.ping(times: arg0)
+              }
               return result.toJavaScriptValue(in: runtime)
             }
           }
@@ -191,7 +322,7 @@ struct ExpoModuleMacroTests {
                 throw Exceptions.AppContextLost()
               }
               guard arguments.count == 2 else {
-                throw Exception(name: "InvalidArgumentCount", description: "Function 'transform' expects 2 argument(s), but got \\(arguments.count)")
+                throw Exceptions.ArgumentsRangeMismatch((functionName: "transform", received: arguments.count, required: 2, maximum: 2))
               }
               let arg0 = try MyRecord.getDynamicType().cast(jsValue: arguments[0], appContext: appContext) as! MyRecord
               let arg1 = try arguments.unownedValue(at: 1).asInt()
@@ -238,7 +369,7 @@ struct ExpoModuleMacroTests {
                 throw Exceptions.AppContextLost()
               }
               guard arguments.count == 1 else {
-                throw Exception(name: "InvalidArgumentCount", description: "Function 'describe' expects 1 argument(s), but got \\(arguments.count)")
+                throw Exceptions.ArgumentsRangeMismatch((functionName: "describe", received: arguments.count, required: 1, maximum: 1))
               }
               let arg0 = try MyRecord.getDynamicType().cast(jsValue: arguments[0], appContext: appContext) as! MyRecord
               let result = self.describe(arg0)
@@ -275,7 +406,7 @@ struct ExpoModuleMacroTests {
           public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
             object.setProperty("doReset") { [self] this, arguments in
               guard arguments.count == 0 else {
-                throw Exception(name: "InvalidArgumentCount", description: "Function 'doReset' expects 0 argument(s), but got \\(arguments.count)")
+                throw Exceptions.ArgumentsRangeMismatch((functionName: "doReset", received: arguments.count, required: 0, maximum: 0))
               }
               try self.reset()
               return .undefined
@@ -310,7 +441,7 @@ struct ExpoModuleMacroTests {
           public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
             object.setProperty("doWork") { [self] this, arguments in
               guard arguments.count == 0 else {
-                throw Exception(name: "InvalidArgumentCount", description: "Function 'doWork' expects 0 argument(s), but got \\(arguments.count)")
+                throw Exceptions.ArgumentsRangeMismatch((functionName: "doWork", received: arguments.count, required: 0, maximum: 0))
               }
               try await self.performWork()
               return .undefined
@@ -345,7 +476,7 @@ struct ExpoModuleMacroTests {
           public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
             object.setProperty("fetchValue") { [self] this, arguments in
               guard arguments.count == 1 else {
-                throw Exception(name: "InvalidArgumentCount", description: "Function 'fetchValue' expects 1 argument(s), but got \\(arguments.count)")
+                throw Exceptions.ArgumentsRangeMismatch((functionName: "fetchValue", received: arguments.count, required: 1, maximum: 1))
               }
               let arg0 = try arguments.unownedValue(at: 0).asString()
               let result = try await self.fetchValue(key: arg0)
@@ -516,7 +647,7 @@ struct ExpoModuleMacroTests {
           public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
             object.setProperty("greet") { [self] this, arguments in
               guard arguments.count == 1 else {
-                throw Exception(name: "InvalidArgumentCount", description: "Function 'greet' expects 1 argument(s), but got \\(arguments.count)")
+                throw Exceptions.ArgumentsRangeMismatch((functionName: "greet", received: arguments.count, required: 1, maximum: 1))
               }
               let arg0 = try arguments.unownedValue(at: 0).asString()
               let result = self.greet(name: arg0)
@@ -558,7 +689,7 @@ struct ExpoModuleMacroTests {
           public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
             object.setProperty("compute") { [self] this, arguments in
               guard arguments.count == 0 else {
-                throw Exception(name: "InvalidArgumentCount", description: "Function 'compute' expects 0 argument(s), but got \\(arguments.count)")
+                throw Exceptions.ArgumentsRangeMismatch((functionName: "compute", received: arguments.count, required: 0, maximum: 0))
               }
               let result = self.compute()
               return result.toJavaScriptValue(in: runtime)
