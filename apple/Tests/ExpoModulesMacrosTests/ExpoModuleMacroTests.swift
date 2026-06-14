@@ -40,7 +40,7 @@ private func assertExpansion(
 @Suite("@ExpoModule / @JS macros")
 struct ExpoModuleMacroTests {
   @Test
-  func `Module with no exposed members emits a Name-only definition derived from the class name`() {
+  func `Module with no exposed members emits the resolved name and an empty definition`() {
     assertExpansion(
       """
       @ExpoModule
@@ -50,10 +50,10 @@ struct ExpoModuleMacroTests {
       expandedSource: """
         final class MyModule: Module {
 
+          public static let _jsName = "MyModule"
+
           public func _synthesizedDefinition() -> [AnyDefinition] {
-            return [
-              Name("MyModule")
-            ]
+            return []
           }
         }
         """
@@ -71,10 +71,10 @@ struct ExpoModuleMacroTests {
       expandedSource: """
         final class MyModule: Module {
 
+          public static let _jsName = "CustomName"
+
           public func _synthesizedDefinition() -> [AnyDefinition] {
-            return [
-              Name("CustomName")
-            ]
+            return []
           }
         }
         """
@@ -96,10 +96,10 @@ struct ExpoModuleMacroTests {
           @JavaScriptActor
           func greet(name: String) -> String { "Hi" }
 
+          public static let _jsName = "MyModule"
+
           public func _synthesizedDefinition() -> [AnyDefinition] {
-            return [
-              Name("MyModule")
-            ]
+            return []
           }
 
           @JavaScriptActor
@@ -133,10 +133,10 @@ struct ExpoModuleMacroTests {
           @JavaScriptActor
           func add(_ a: Double, to b: Double) -> Double { a + b }
 
+          public static let _jsName = "MyModule"
+
           public func _synthesizedDefinition() -> [AnyDefinition] {
-            return [
-              Name("MyModule")
-            ]
+            return []
           }
 
           @JavaScriptActor
@@ -178,10 +178,10 @@ struct ExpoModuleMacroTests {
             transform([MyRecord].self)
           }
 
+          public static let _jsName = "MyModule"
+
           public func _synthesizedDefinition() -> [AnyDefinition] {
-            return [
-              Name("MyModule")
-            ]
+            return []
           }
 
           @JavaScriptActor
@@ -225,10 +225,10 @@ struct ExpoModuleMacroTests {
             describe(MyRecord.self)
           }
 
+          public static let _jsName = "MyModule"
+
           public func _synthesizedDefinition() -> [AnyDefinition] {
-            return [
-              Name("MyModule")
-            ]
+            return []
           }
 
           @JavaScriptActor
@@ -265,10 +265,10 @@ struct ExpoModuleMacroTests {
           @JavaScriptActor
           func reset() throws {}
 
+          public static let _jsName = "MyModule"
+
           public func _synthesizedDefinition() -> [AnyDefinition] {
-            return [
-              Name("MyModule")
-            ]
+            return []
           }
 
           @JavaScriptActor
@@ -300,10 +300,10 @@ struct ExpoModuleMacroTests {
         final class MyModule: Module {
           func performWork() async throws {}
 
+          public static let _jsName = "MyModule"
+
           public func _synthesizedDefinition() -> [AnyDefinition] {
-            return [
-              Name("MyModule")
-            ]
+            return []
           }
 
           @JavaScriptActor
@@ -335,10 +335,10 @@ struct ExpoModuleMacroTests {
         final class MyModule: Module {
           func fetchValue(key: String) async throws -> Int { 0 }
 
+          public static let _jsName = "MyModule"
+
           public func _synthesizedDefinition() -> [AnyDefinition] {
-            return [
-              Name("MyModule")
-            ]
+            return []
           }
 
           @JavaScriptActor
@@ -372,10 +372,10 @@ struct ExpoModuleMacroTests {
           @JavaScriptActor
           var status: String { "ok" }
 
+          public static let _jsName = "MyModule"
+
           public func _synthesizedDefinition() -> [AnyDefinition] {
-            return [
-              Name("MyModule")
-            ]
+            return []
           }
 
           @JavaScriptActor
@@ -407,10 +407,10 @@ struct ExpoModuleMacroTests {
           @JavaScriptActor
           var ready: Bool = false
 
+          public static let _jsName = "MyModule"
+
           public func _synthesizedDefinition() -> [AnyDefinition] {
-            return [
-              Name("MyModule")
-            ]
+            return []
           }
 
           @JavaScriptActor
@@ -452,10 +452,10 @@ struct ExpoModuleMacroTests {
             config(MyRecord.self)
           }
 
+          public static let _jsName = "MyModule"
+
           public func _synthesizedDefinition() -> [AnyDefinition] {
-            return [
-              Name("MyModule")
-            ]
+            return []
           }
 
           @JavaScriptActor
@@ -506,10 +506,10 @@ struct ExpoModuleMacroTests {
 
           func notExposed() {}
 
+          public static let _jsName = "MyModule"
+
           public func _synthesizedDefinition() -> [AnyDefinition] {
-            return [
-              Name("MyModule")
-            ]
+            return []
           }
 
           @JavaScriptActor
@@ -548,10 +548,10 @@ struct ExpoModuleMacroTests {
         final class MyModule: Module {
           nonisolated func compute() -> Int { 42 }
 
+          public static let _jsName = "MyModule"
+
           public func _synthesizedDefinition() -> [AnyDefinition] {
-            return [
-              Name("MyModule")
-            ]
+            return []
           }
 
           @JavaScriptActor
@@ -612,10 +612,10 @@ struct ExpoModuleMacroTests {
             onReady(MyModule.self)
           }
 
+          public static let _jsName = "MyModule"
+
           public func _synthesizedDefinition() -> [AnyDefinition] {
-            return [
-              Name("MyModule")
-            ]
+            return []
           }
         }
         """
@@ -633,6 +633,8 @@ struct ExpoModuleMacroTests {
       expandedSource: """
         final class MyModule {
 
+          public static let _jsName = "MyModule"
+
           public weak var appContext: AppContext?
 
           public required init(appContext: AppContext) {
@@ -640,9 +642,7 @@ struct ExpoModuleMacroTests {
           }
 
           public func _synthesizedDefinition() -> [AnyDefinition] {
-            return [
-              Name("MyModule")
-            ]
+            return []
           }
         }
 
@@ -663,6 +663,8 @@ struct ExpoModuleMacroTests {
       expandedSource: """
         final class MyModule: SomeOtherBase {
 
+          public static let _jsName = "MyModule"
+
           public weak var appContext: AppContext?
 
           public required init(appContext: AppContext) {
@@ -670,9 +672,7 @@ struct ExpoModuleMacroTests {
           }
 
           public func _synthesizedDefinition() -> [AnyDefinition] {
-            return [
-              Name("MyModule")
-            ]
+            return []
           }
         }
 
@@ -693,10 +693,10 @@ struct ExpoModuleMacroTests {
       expandedSource: """
         final class MyModule: Module {
 
+          public static let _jsName = "MyModule"
+
           public func _synthesizedDefinition() -> [AnyDefinition] {
-            return [
-              Name("MyModule")
-            ]
+            return []
           }
         }
         """
@@ -714,10 +714,10 @@ struct ExpoModuleMacroTests {
       expandedSource: """
         final class MyModule: BaseModule {
 
+          public static let _jsName = "MyModule"
+
           public func _synthesizedDefinition() -> [AnyDefinition] {
-            return [
-              Name("MyModule")
-            ]
+            return []
           }
         }
         """
@@ -735,6 +735,8 @@ struct ExpoModuleMacroTests {
       expandedSource: """
         final class MyModule: AnyModule {
 
+          public static let _jsName = "MyModule"
+
           public weak var appContext: AppContext?
 
           public required init(appContext: AppContext) {
@@ -742,9 +744,7 @@ struct ExpoModuleMacroTests {
           }
 
           public func _synthesizedDefinition() -> [AnyDefinition] {
-            return [
-              Name("MyModule")
-            ]
+            return []
           }
         }
         """
@@ -764,14 +764,14 @@ struct ExpoModuleMacroTests {
         final class MyModule {
           public weak var appContext: AppContext?
 
+          public static let _jsName = "MyModule"
+
           public required init(appContext: AppContext) {
             self.appContext = appContext
           }
 
           public func _synthesizedDefinition() -> [AnyDefinition] {
-            return [
-              Name("MyModule")
-            ]
+            return []
           }
         }
 
@@ -794,12 +794,12 @@ struct ExpoModuleMacroTests {
         final class MyModule {
           public required init(appContext: AppContext) {}
 
+          public static let _jsName = "MyModule"
+
           public weak var appContext: AppContext?
 
           public func _synthesizedDefinition() -> [AnyDefinition] {
-            return [
-              Name("MyModule")
-            ]
+            return []
           }
         }
 
@@ -822,6 +822,8 @@ struct ExpoModuleMacroTests {
         final class MyModule {
           public required init(c: AppContext) {}
 
+          public static let _jsName = "MyModule"
+
           public weak var appContext: AppContext?
 
           public required init(appContext: AppContext) {
@@ -829,9 +831,7 @@ struct ExpoModuleMacroTests {
           }
 
           public func _synthesizedDefinition() -> [AnyDefinition] {
-            return [
-              Name("MyModule")
-            ]
+            return []
           }
         }
 
@@ -859,10 +859,10 @@ struct ExpoModuleMacroTests {
             Name("MyModule")
           }
 
+          public static let _jsName = "MyModule"
+
           public func _synthesizedDefinition() -> [AnyDefinition] {
-            return [
-              Name("MyModule")
-            ]
+            return []
           }
         }
         """
@@ -888,10 +888,10 @@ struct ExpoModuleMacroTests {
             Name("MyModule")
           }
 
+          public static let _jsName = "MyModule"
+
           public func _synthesizedDefinition() -> [AnyDefinition] {
-            return [
-              Name("MyModule")
-            ]
+            return []
           }
         }
         """
