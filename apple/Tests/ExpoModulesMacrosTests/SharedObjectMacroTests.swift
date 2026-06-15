@@ -338,7 +338,7 @@ struct ExpoModuleClassesTests {
           public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
             object.setProperty("ping") { [self] this, arguments in
               guard arguments.count == 0 else {
-                throw Exception(name: "InvalidArgumentCount", description: "Function 'ping' expects 0 argument(s), but got \\(arguments.count)")
+                throw Exceptions.ArgumentsRangeMismatch((functionName: "ping", received: arguments.count, required: 0, maximum: 0))
               }
               let result = self.ping()
               return result.toJavaScriptValue(in: runtime)

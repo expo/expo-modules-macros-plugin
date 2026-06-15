@@ -34,64 +34,157 @@ internal struct JSFunction {
     self.isAsync = effectSpecifiers?.asyncSpecifier != nil
   }
 
+  /// The number of leading parameters that must always be supplied: the total minus the maximal
+  /// trailing run of *omittable* parameters (each having a default value or an optional type). A
+  /// non-omittable parameter part-way through stops the run, since arguments are positional — a
+  /// required parameter after an omittable one forces the earlier one to be supplied too.
+  private var requiredArgumentCount: Int {
+    var required = parameters.count
+    for parameter in parameters.reversed() {
+      guard isOmittable(parameter) else {
+        break
+      }
+      required -= 1
+    }
+    return required
+  }
+
   /// The decode-call-encode statements that form the host-function body, indented with the given
-  /// prefix. Arity guard, then per-argument decode (primitives via a direct typed accessor like
-  /// `asDouble()` on a zero-copy `arguments.unownedValue(at:)`, others via `getDynamicType().cast(...)`),
-  /// the `self.<name>(...)` call, and the
-  /// result encode (primitives via `toJavaScriptValue(in:)`, others via `castToJS(...)`).
+  /// prefix. An arity guard (an exact check when every parameter is required, otherwise a range
+  /// check) throwing `Exceptions.ArgumentsRangeMismatch`; then the decode of the always-present
+  /// required prefix (primitives via a direct typed accessor like `asDouble()` on a zero-copy
+  /// `arguments.unownedValue(at:)`, others via `getDynamicType().cast(...)`); then the call and
+  /// result encode (primitives via `toJavaScriptValue(in:)`, others via `castToJS(...)`). When a
+  /// trailing run of parameters is omittable the call branches on `arguments.count`, decoding only
+  /// the slots that branch actually has — `arguments[i]` traps past `count`, so a slot the caller
+  /// didn't pass is never indexed.
   private func bodyStatements(indent: String) -> String {
+    let required = requiredArgumentCount
+    let maximum = parameters.count
     var lines: [String] = []
 
-    lines.append(
-      """
-      guard arguments.count == \(parameters.count) else {
-        throw Exception(name: "InvalidArgumentCount", description: "Function '\(jsName)' expects \(parameters.count) argument(s), but got \\(arguments.count)")
-      }
-      """)
-
-    var callArguments: [String] = []
-    for (index, parameter) in parameters.enumerated() {
-      let type = parameter.type.trimmedDescription
-
-      // Primitives decode through a direct typed accessor (`asDouble()`, etc.) on a borrowed
-      // `JavaScriptUnownedValue` — no owning `JavaScriptValue` allocation, no `jsi::Value` copy, no
-      // `getDynamicType()` allocation, no `Any` boxing, no force-cast — while still validating and
-      // throwing `TypeError` on a mismatch. Other types fall back to the dynamic converter, which
-      // needs an owning value, so they index the buffer directly.
-      if let accessor = fastDecodeAccessor(for: type) {
-        lines.append("let arg\(index) = try arguments.unownedValue(at: \(index)).\(accessor)()")
-      } else {
-        lines.append(
-          "let arg\(index) = try \(type).getDynamicType().cast(jsValue: arguments[\(index)], appContext: appContext) as! \(type)")
-      }
-
-      let label = parameter.firstName.text
-      callArguments.append(label == "_" ? "arg\(index)" : "\(label): arg\(index)")
+    if required == maximum {
+      lines.append(
+        """
+        guard arguments.count == \(maximum) else {
+          throw Exceptions.ArgumentsRangeMismatch((functionName: "\(jsName)", received: arguments.count, required: \(required), maximum: \(maximum)))
+        }
+        """)
+    } else {
+      lines.append(
+        """
+        guard arguments.count >= \(required) && arguments.count <= \(maximum) else {
+          throw Exceptions.ArgumentsRangeMismatch((functionName: "\(jsName)", received: arguments.count, required: \(required), maximum: \(maximum)))
+        }
+        """)
     }
 
-    let tryKeyword = (isThrowing || isAsync) ? "try " : ""
-    let awaitKeyword = isAsync ? "await " : ""
-    let callExpression =
-      "\(tryKeyword)\(awaitKeyword)self.\(swiftName)(\(callArguments.joined(separator: ", ")))"
+    // Decode the required prefix once — these slots are present in every accepted arity, so the
+    // decode is shared rather than repeated per branch.
+    for index in 0..<required {
+      lines.append(decodeStatement(at: index))
+    }
 
-    if let returnType {
-      lines.append("let result = \(callExpression)")
-      // Primitives encode through `toJavaScriptValue(in:)` (the typed `JavaScriptRepresentable`
-      // conversion) — no `Any`, no dynamic-type allocation. Others go through the dynamic converter.
-      if fastDecodeAccessor(for: returnType) != nil {
-        lines.append("return result.toJavaScriptValue(in: runtime)")
-      } else {
-        lines.append("return try \(returnType).getDynamicType().castToJS(result, appContext: appContext, in: runtime)")
-      }
+    if required == maximum {
+      // No omittable trailing run: a single flat call with every argument decoded.
+      lines.append(contentsOf: callAndEncodeLines(arity: maximum, decodingFrom: required))
     } else {
-      lines.append(callExpression)
-      lines.append("return .undefined")
+      // One call shape per accepted arity. Each branch decodes only the trailing slots it has and
+      // fills the rest (defaulted params drop their label so Swift applies the default; optional
+      // params are passed `nil`). A value-returning function binds the result from a `switch`
+      // expression and encodes once after it; a no-return one calls inline in a `switch` statement
+      // and returns `.undefined`.
+      if returnType != nil {
+        lines.append("let result = switch arguments.count {")
+      } else {
+        lines.append("switch arguments.count {")
+      }
+      for arity in required...maximum {
+        let label = arity == maximum ? "default:" : "case \(arity):"
+        lines.append(label)
+        for index in required..<arity {
+          lines.append("  " + decodeStatement(at: index))
+        }
+        lines.append("  \(callExpression(arity: arity))")
+      }
+      lines.append("}")
+      lines.append(contentsOf: encodeResultLines())
     }
 
     return lines
       .flatMap { $0.split(separator: "\n", omittingEmptySubsequences: false) }
       .map { indent + $0 }
       .joined(separator: "\n")
+  }
+
+  /// `let arg<index> = …` decoding the slot at `index` by its static type: a primitive through a
+  /// direct typed accessor on a borrowed `JavaScriptUnownedValue` (no owning value, no `jsi::Value`
+  /// copy, no `getDynamicType()` allocation, no `Any` boxing, no force-cast — still validating and
+  /// throwing `TypeError` on a mismatch), any other type through the dynamic converter (which needs
+  /// an owning value, so it indexes the buffer directly).
+  private func decodeStatement(at index: Int) -> String {
+    let type = parameters[index].type.trimmedDescription
+    if let accessor = fastDecodeAccessor(for: type) {
+      return "let arg\(index) = try arguments.unownedValue(at: \(index)).\(accessor)()"
+    }
+    return "let arg\(index) = try \(type).getDynamicType().cast(jsValue: arguments[\(index)], appContext: appContext) as! \(type)"
+  }
+
+  /// The `self.<name>(...)` call for the given arity. Slots `0..<arity` are passed their decoded
+  /// `arg<i>`; a trailing optional-without-default slot that this arity omits is passed `nil`; a
+  /// trailing defaulted slot that this arity omits is dropped entirely so Swift applies its default.
+  private func callExpression(arity: Int) -> String {
+    var callArguments: [String] = []
+    for (index, parameter) in parameters.enumerated() {
+      let label = parameter.firstName.text
+      let value: String?
+      if index < arity {
+        value = "arg\(index)"
+      } else if hasDefaultValue(parameter) {
+        // Omitted defaulted slot: drop it from the call so Swift fills in the default.
+        value = nil
+      } else {
+        // Omitted optional-without-default slot: pass `nil`.
+        value = "nil"
+      }
+      guard let value else {
+        continue
+      }
+      callArguments.append(label == "_" ? value : "\(label): \(value)")
+    }
+    let tryKeyword = (isThrowing || isAsync) ? "try " : ""
+    let awaitKeyword = isAsync ? "await " : ""
+    return "\(tryKeyword)\(awaitKeyword)self.\(swiftName)(\(callArguments.joined(separator: ", ")))"
+  }
+
+  /// The flat (single-arity) call-and-encode lines used when no trailing parameter is omittable:
+  /// `let result = self.f(...)` then the return encode (or the no-return `self.f(...)` + `.undefined`).
+  private func callAndEncodeLines(arity: Int, decodingFrom: Int) -> [String] {
+    var lines: [String] = []
+    for index in decodingFrom..<arity {
+      lines.append(decodeStatement(at: index))
+    }
+    if returnType != nil {
+      lines.append("let result = \(callExpression(arity: arity))")
+      lines.append(contentsOf: encodeResultLines())
+    } else {
+      lines.append(callExpression(arity: arity))
+      lines.append("return .undefined")
+    }
+    return lines
+  }
+
+  /// Encode the `result` local back to JS and return it: a primitive through `toJavaScriptValue(in:)`
+  /// (the typed `JavaScriptRepresentable` conversion — no `Any`, no dynamic-type allocation), any
+  /// other type through the dynamic converter. A no-return function returns `.undefined` instead.
+  private func encodeResultLines() -> [String] {
+    guard let returnType else {
+      return ["return .undefined"]
+    }
+    if fastDecodeAccessor(for: returnType) != nil {
+      return ["return result.toJavaScriptValue(in: runtime)"]
+    }
+    return ["return try \(returnType).getDynamicType().castToJS(result, appContext: appContext, in: runtime)"]
   }
 
   /// The `setProperty` statement that installs this function on the JS object. The decode-call-encode
