@@ -1,0 +1,3 @@
+import ExpoModulesScanner
+
+Scanner.main()
