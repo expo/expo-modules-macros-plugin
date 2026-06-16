@@ -132,11 +132,15 @@ func swiftFiles(in paths: [String]) -> [String] {
 /// Recursively enumerates `.swift` files under a directory, calling `skipDescendants()` on any
 /// pruned directory so its subtree is never read. Uses the URL enumerator (rather than the
 /// path-based one) precisely because it supports skipping a subtree mid-walk.
+///
+/// Directory-ness is read from `hasDirectoryPath` (the enumerator sets a trailing slash on the URLs
+/// it yields) rather than `resourceValues(forKeys: [.isDirectoryKey])`, which re-`stat`s each entry.
+/// The walk is the dominant cost of a whole-tree scan, and skipping that per-entry stat measurably
+/// shortens it.
 private func swiftFiles(inDirectory directory: URL, fileManager: FileManager) -> [String] {
-  let keys: [URLResourceKey] = [.isDirectoryKey]
   guard let enumerator = fileManager.enumerator(
     at: directory,
-    includingPropertiesForKeys: keys,
+    includingPropertiesForKeys: nil,
     options: [.skipsHiddenFiles]
   ) else {
     return []
@@ -144,8 +148,7 @@ private func swiftFiles(inDirectory directory: URL, fileManager: FileManager) ->
 
   var result: [String] = []
   for case let url as URL in enumerator {
-    let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
-    if isDirectory {
+    if url.hasDirectoryPath {
       if prunedDirectoryNames.contains(url.lastPathComponent) {
         enumerator.skipDescendants()
       }
