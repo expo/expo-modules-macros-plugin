@@ -1,11 +1,12 @@
 import Foundation
 
-/// Which Expo macro was found on a declaration. The scanner recognizes the three entry-point
-/// macros that mark a type or member as part of a module's JS surface.
+/// Which Expo macro was found on a declaration. The scanner recognizes the entry-point macros that
+/// mark a type or member as part of a module's JS surface, plus `@Record` for convertible types.
 enum DetectedMacro: String, Codable, CaseIterable {
   case expoModule = "ExpoModule"
   case js = "JS"
   case sharedObject = "SharedObject"
+  case record = "Record"
 }
 
 /// A single argument passed to a macro, e.g. `"Foo"` or `classes: [Bar.self]`. The label is `nil`

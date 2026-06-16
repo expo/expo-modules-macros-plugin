@@ -58,6 +58,24 @@ struct DetectionVisitorTests {
   }
 
   @Test
+  func `Detects a top-level @Record struct`() {
+    let detections = detect(
+      """
+      @Record
+      struct Options {
+        var name: String
+        var count: Int = 0
+      }
+      """
+    )
+    #expect(detections.count == 1)
+    #expect(detections.first?.macro == .record)
+    #expect(detections.first?.name == "Options")
+    #expect(detections.first?.declarationKind == "struct")
+    #expect(detections.first?.arguments.isEmpty == true)
+  }
+
+  @Test
   func `Ignores @JS members nested in a type body`() {
     let detections = detect(
       """
@@ -175,6 +193,7 @@ struct MacroPrefilterTests {
     #expect(mightContainMacro(in: "@ExpoModule\nclass M {}"))
     #expect(mightContainMacro(in: "@SharedObject\nclass C: SharedObject {}"))
     #expect(mightContainMacro(in: "struct S {\n  @JS func f() {}\n}"))
+    #expect(mightContainMacro(in: "@Record\nstruct Options {}"))
   }
 
   @Test

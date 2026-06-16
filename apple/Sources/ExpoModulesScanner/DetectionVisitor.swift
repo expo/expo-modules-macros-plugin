@@ -1,11 +1,11 @@
 import SwiftSyntax
 
-/// Walks a parsed source file and records top-level declarations carrying `@ExpoModule`, `@JS`, or
-/// `@SharedObject`. Only file-scope declarations are considered: `@ExpoModule`/`@SharedObject` apply
-/// to top-level types, so descending into type and function bodies would only surface false
-/// positives. Recognition mirrors the macros themselves — a purely syntactic match on the spelled
-/// attribute name — so it sees the same declarations the compiler would hand the plugin, without
-/// compiling anything.
+/// Walks a parsed source file and records top-level declarations carrying `@ExpoModule`, `@JS`,
+/// `@SharedObject`, or `@Record`. Only file-scope declarations are considered: these macros apply to
+/// top-level types, so descending into type and function bodies would only surface false positives.
+/// Recognition mirrors the macros themselves — a purely syntactic match on the spelled attribute
+/// name — so it sees the same declarations the compiler would hand the plugin, without compiling
+/// anything.
 final class DetectionVisitor: SyntaxVisitor {
   private let file: String
   private let converter: SourceLocationConverter
