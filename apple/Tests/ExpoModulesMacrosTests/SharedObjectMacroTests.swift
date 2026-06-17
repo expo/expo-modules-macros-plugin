@@ -336,7 +336,7 @@ struct ExpoModuleClassesTests {
 
           @JavaScriptActor
           public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
-            object.setProperty("ping") { [self] this, arguments in
+            object.setProperty("ping") { [self] (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
               guard arguments.count == 0 else {
                 throw Exceptions.ArgumentsRangeMismatch((functionName: "ping", received: arguments.count, required: 0, maximum: 0))
               }

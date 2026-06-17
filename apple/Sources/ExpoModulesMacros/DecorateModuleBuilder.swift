@@ -201,9 +201,24 @@ internal struct JSFunction {
   /// body never references `appContext`, so the capture and guard are omitted to avoid the
   /// unused-capture warning.
   var decorateStatements: String {
+    // Synchronous `@JS` functions never decode `this` (the receiver is the module's real `self`), so
+    // they bind through the unowned-`this` `setProperty` overload, which hands `this` in as a borrowed
+    // `JavaScriptUnownedValue` instead of allocating an owning `JavaScriptValue` and forming its
+    // `weak`-runtime reference on every call. The first parameter is typed `borrowing
+    // JavaScriptUnownedValue` to select that (otherwise `@_disfavoredOverload`) overload — which
+    // requires the *parenthesized, fully typed* parameter list, since Swift rejects a type annotation
+    // on a shorthand `{ [capture] name, name in }` parameter. Async functions keep the untyped
+    // shorthand and the owning-`this` overload: there is no unowned-`this` async variant and the buffer
+    // escapes into the task anyway.
+    let captures = usesAppContext ? "[weak appContext, self]" : "[self]"
+    let parameters =
+      isAsync
+      ? "this, arguments"
+      : "(this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer)"
+
     if usesAppContext {
       return """
-          object.setProperty("\(jsName)") { [weak appContext, self] this, arguments in
+          object.setProperty("\(jsName)") { \(captures) \(parameters) in
             guard let appContext else {
               throw Exceptions.AppContextLost()
             }
@@ -212,7 +227,7 @@ internal struct JSFunction {
         """
     }
     return """
-        object.setProperty("\(jsName)") { [self] this, arguments in
+        object.setProperty("\(jsName)") { \(captures) \(parameters) in
       \(bodyStatements(indent: "    "))
         }
       """
@@ -323,9 +338,14 @@ internal struct JSProperty {
       .split(separator: "\n", omittingEmptySubsequences: false)
       .map { "  \($0)" }
       .joined(separator: "\n")
+    // Property `get`/`set` accessors are always synchronous and never decode `this`, so they bind
+    // through the unowned-`this` `setProperty` overload like sync functions. The parameter list is
+    // parenthesized and fully typed because Swift rejects a type annotation on a shorthand closure
+    // parameter; the explicit `borrowing JavaScriptUnownedValue` selects the unowned-`this` overload.
+    let parameters = "(this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer)"
     if usesAppContext {
       return """
-        \(descriptorName).setProperty("\(key)") { [weak appContext, self] this, arguments in
+        \(descriptorName).setProperty("\(key)") { [weak appContext, self] \(parameters) in
           guard let appContext else {
             throw Exceptions.AppContextLost()
           }
@@ -334,7 +354,7 @@ internal struct JSProperty {
         """
     }
     return """
-      \(descriptorName).setProperty("\(key)") { [self] this, arguments in
+      \(descriptorName).setProperty("\(key)") { [self] \(parameters) in
       \(indentedBody)
       }
       """
