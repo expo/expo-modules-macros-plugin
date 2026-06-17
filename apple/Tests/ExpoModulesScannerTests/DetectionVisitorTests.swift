@@ -224,12 +224,21 @@ struct MacroPrefilterTests {
 
 @Suite("Scanning a directory")
 struct ScanTests {
-  /// Creates a temporary directory tree of `(relativePath, contents)` files, runs `scan` on it, and
-  /// removes the tree afterward.
+  /// Creates a temporary directory tree of `(relativePath, contents)` files, runs `scanModules` on
+  /// it, and removes the tree afterward.
   private func withTree(
     _ files: [(String, String)],
-    mode: ScanMode = .modules,
     _ body: (ScanModulesResult) throws -> Void
+  ) throws {
+    try withTreeRoot(files) { root in
+      try body(scanModules(paths: [root.path]))
+    }
+  }
+
+  /// Materializes a temporary tree and hands its root to `body`, removing it afterward.
+  private func withTreeRoot(
+    _ files: [(String, String)],
+    _ body: (URL) throws -> Void
   ) throws {
     let fileManager = FileManager.default
     let root = fileManager.temporaryDirectory.appendingPathComponent("scanner-test-\(ProcessInfo.processInfo.globallyUniqueString)")
@@ -241,7 +250,7 @@ struct ScanTests {
       try contents.write(to: url, atomically: true, encoding: .utf8)
     }
 
-    try body(scan(paths: [root.path], mode: mode))
+    try body(root)
   }
 
   @Test
@@ -274,21 +283,23 @@ struct ScanTests {
   }
 
   @Test
-  func `modules mode reports only @ExpoModule, ignoring other macros`() throws {
+  func `scanModules reports only @ExpoModule, ignoring other macros`() throws {
     let files = [
       ("Module.swift", "@ExpoModule\nfinal class MyModule {}"),
       ("Shared.swift", "@SharedObject\nfinal class Cache: SharedObject {}"),
       ("Options.swift", "@Record\nstruct Options { var name: String }"),
     ]
-    try withTree(files, mode: .modules) { result in
+    try withTreeRoot(files) { root in
+      let result = scanModules(paths: [root.path])
       #expect(result.modules.map(\.name) == ["MyModule"])
       // @SharedObject / @Record files aren't even parsed: the modules pre-filter is @ExpoModule-only.
       #expect(result.stats.filesParsed == 1)
-    }
-    // The same tree in exports mode surfaces all three.
-    try withTree(files, mode: .exports) { result in
-      #expect(result.modules.map(\.name).sorted() == ["Cache", "MyModule", "Options"])
-      #expect(result.stats.filesParsed == 3)
+
+      // The shared core, given the full macro set, surfaces all three — confirming it's the
+      // @ExpoModule-only filter, not the walk, that scopes scanModules.
+      let all = collectDetections(paths: [root.path], macros: Set(DetectedMacro.allCases))
+      #expect(all.detections.map(\.name).sorted() == ["Cache", "MyModule", "Options"])
+      #expect(all.stats.filesParsed == 3)
     }
   }
 

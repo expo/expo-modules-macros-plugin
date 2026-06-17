@@ -1,8 +1,8 @@
 import ExpoModulesScanner
 import Foundation
 
-/// Command-line front end for the scanner. Parses the subcommand and paths, maps the subcommand to a
-/// `ScanMode`, and delegates the actual scan + JSON output to the library. Each path may be a
+/// Command-line front end for the scanner. Parses the subcommand and paths, then delegates to the
+/// matching library entry (which runs the scan and writes its JSON output). Each path may be a
 /// `.swift` file or a directory (scanned recursively for `.swift` files).
 ///
 /// Subcommands:
@@ -58,7 +58,7 @@ case "scan-modules":
   guard !paths.isEmpty else {
     fail("scan-modules requires at least one path", usage: true)
   }
-  exit(Scanner.run(mode: .modules, paths: paths))
+  exit(Scanner.runModules(paths: paths))
 
 case "scan-exports":
   // Deep extraction (members, record fields, the JS surface of each type) lands in a separate PR.

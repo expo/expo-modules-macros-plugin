@@ -2,39 +2,12 @@ import Foundation
 import SwiftParser
 import SwiftSyntax
 
-/// The scanner's public entry point. Argument parsing, subcommand dispatch, and usage text live in
-/// the CLI target; this just runs a scan in a given mode and writes its JSON report to stdout.
-///
-/// The detection model (`Detection`, `DetectionVisitor`, …) stays `internal`: tests reach it via
-/// `@testable import`, and the CLI only needs `ScanMode` plus this entry, so nothing else is exposed.
-public enum Scanner {
-  /// Scans `paths` in `mode`, prints the JSON report to stdout, and returns a process exit code:
-  /// `0` on success, `1` if encoding fails. The CLI maps its subcommand to a `ScanMode` and exits
-  /// with the returned code.
-  public static func run(mode: ScanMode, paths: [String]) -> Int32 {
-    let result = scan(paths: paths, mode: mode)
-
-    do {
-      let encoder = JSONEncoder()
-      encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-      let data = try encoder.encode(result)
-      FileHandle.standardOutput.write(data)
-      FileHandle.standardOutput.write(Data("\n".utf8))
-      return 0
-    } catch {
-      FileHandle.standardError.write(Data("error: failed to encode results: \(error)\n".utf8))
-      return 1
-    }
-  }
-}
-
-/// Scans the given paths in the given mode and returns the detections (in file then source order)
-/// plus the stats for the run. Kept separate from `main()` (and `internal`) so tests can drive it
-/// without going through argv/stdout.
-func scan(paths: [String], mode: ScanMode) -> ScanModulesResult {
+/// Walks `paths`, parses each `.swift` file that might contain one of `macros` (the pre-filter), and
+/// returns every detection (in file then source order) with the run's stats. The shared core every
+/// scan command builds on; each command projects these detections into its own output shape.
+func collectDetections(paths: [String], macros: Set<DetectedMacro>) -> (detections: [Detection], stats: ScanStats) {
   let clock = ContinuousClock()
   let start = clock.now
-  let macros = mode.detectedMacros
 
   var detections: [Detection] = []
   var filesScanned = 0
@@ -49,9 +22,9 @@ func scan(paths: [String], mode: ScanMode) -> ScanModulesResult {
       continue
     }
     filesScanned += 1
-    // Skip the (relatively expensive) parse for files that can't contain any of the mode's macros.
-    // A plain substring scan is far cheaper than a full parse, and most files in a large tree
-    // mention none of these names. See `mightContainMacro` for why this never drops a real match.
+    // Skip the (relatively expensive) parse for files that can't contain any of the macros. A plain
+    // substring scan is far cheaper than a full parse, and most files in a large tree mention none
+    // of these names. See `mightContainMacro` for why this never drops a real match.
     guard mightContainMacro(in: source, prefilter: prefilter) else {
       continue
     }
@@ -62,17 +35,19 @@ func scan(paths: [String], mode: ScanMode) -> ScanModulesResult {
   let elapsed = (clock.now - start).components
   let durationMs = Double(elapsed.seconds) * 1000 + Double(elapsed.attoseconds) / 1e15
 
-  let modules = detections.map {
-    // Resolve the JS name the way the macro does: explicit `@ExpoModule("Foo")` override, else the
-    // class name.
-    ScannedModule(name: $0.name, jsName: $0.jsName ?? $0.name, file: $0.file)
-  }
-
-  return ScanModulesResult(
-    modules: modules,
-    stats: ScanStats(filesScanned: filesScanned, filesParsed: filesParsed, durationMs: durationMs)
-  )
+  return (detections, ScanStats(filesScanned: filesScanned, filesParsed: filesParsed, durationMs: durationMs))
 }
+
+/// Parses one source string and returns its detections for the given macro set. The unit of work the
+/// tests exercise.
+func detect(source: String, file: String, macros: Set<DetectedMacro>) -> [Detection] {
+  let tree = Parser.parse(source: source)
+  let visitor = DetectionVisitor(file: file, tree: tree, detectedMacros: macros)
+  visitor.walk(tree)
+  return visitor.detections
+}
+
+// MARK: - Pre-filter
 
 /// Builds the pre-filter regex for a macro set, e.g. `@(ExpoModule)` for a `modules` scan or
 /// `@(ExpoModule|JS|Record|SharedObject)` for an `exports` scan. A precompiled `NSRegularExpression`
@@ -94,14 +69,7 @@ func mightContainMacro(in source: String, prefilter: NSRegularExpression) -> Boo
   return prefilter.firstMatch(in: source, range: range) != nil
 }
 
-/// Parses one source string and returns its detections for the given macro set. The unit of work the
-/// tests exercise.
-func detect(source: String, file: String, macros: Set<DetectedMacro>) -> [Detection] {
-  let tree = Parser.parse(source: source)
-  let visitor = DetectionVisitor(file: file, tree: tree, detectedMacros: macros)
-  visitor.walk(tree)
-  return visitor.detections
-}
+// MARK: - File discovery
 
 /// Directory names skipped during the recursive walk. These hold build products, dependencies, and
 /// git internals — never source worth scanning — and pruning them keeps the walk from descending
