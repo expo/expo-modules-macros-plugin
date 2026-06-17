@@ -31,7 +31,7 @@ public enum Scanner {
 /// Scans the given paths in the given mode and returns the detections (in file then source order)
 /// plus the stats for the run. Kept separate from `main()` (and `internal`) so tests can drive it
 /// without going through argv/stdout.
-func scan(paths: [String], mode: ScanMode) -> ScanResult {
+func scan(paths: [String], mode: ScanMode) -> ScanModulesResult {
   let clock = ContinuousClock()
   let start = clock.now
   let macros = mode.detectedMacros
@@ -62,8 +62,14 @@ func scan(paths: [String], mode: ScanMode) -> ScanResult {
   let elapsed = (clock.now - start).components
   let durationMs = Double(elapsed.seconds) * 1000 + Double(elapsed.attoseconds) / 1e15
 
-  return ScanResult(
-    detections: detections,
+  let modules = detections.map {
+    // Resolve the JS name the way the macro does: explicit `@ExpoModule("Foo")` override, else the
+    // class name.
+    ScannedModule(name: $0.name, jsName: $0.jsName ?? $0.name, file: $0.file)
+  }
+
+  return ScanModulesResult(
+    modules: modules,
     stats: ScanStats(filesScanned: filesScanned, filesParsed: filesParsed, durationMs: durationMs)
   )
 }

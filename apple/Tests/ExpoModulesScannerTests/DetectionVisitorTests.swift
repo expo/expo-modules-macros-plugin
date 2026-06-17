@@ -229,7 +229,7 @@ struct ScanTests {
   private func withTree(
     _ files: [(String, String)],
     mode: ScanMode = .modules,
-    _ body: (ScanResult) throws -> Void
+    _ body: (ScanModulesResult) throws -> Void
   ) throws {
     let fileManager = FileManager.default
     let root = fileManager.temporaryDirectory.appendingPathComponent("scanner-test-\(ProcessInfo.processInfo.globallyUniqueString)")
@@ -251,11 +251,25 @@ struct ScanTests {
       ("Plain.swift", "final class Plain {}"),
       ("Notes.swift", "// just a comment, no macros here"),
     ]) { result in
-      #expect(result.detections.map(\.name) == ["MyModule"])
+      #expect(result.modules.map(\.name) == ["MyModule"])
       // All three .swift files are read; only the one mentioning a macro is parsed.
       #expect(result.stats.filesScanned == 3)
       #expect(result.stats.filesParsed == 1)
       #expect(result.stats.durationMs >= 0)
+    }
+  }
+
+  @Test
+  func `Resolves jsName: explicit override, else the class name`() throws {
+    try withTree([
+      ("Plain.swift", "@ExpoModule\nfinal class PlainModule {}"),
+      ("Renamed.swift", "@ExpoModule(\"JSName\")\nfinal class RenamedModule {}"),
+    ]) { result in
+      let byName = Dictionary(uniqueKeysWithValues: result.modules.map { ($0.name, $0.jsName) })
+      // No override -> jsName falls back to the class name.
+      #expect(byName["PlainModule"] == "PlainModule")
+      // Override -> jsName is the argument.
+      #expect(byName["RenamedModule"] == "JSName")
     }
   }
 
@@ -267,13 +281,13 @@ struct ScanTests {
       ("Options.swift", "@Record\nstruct Options { var name: String }"),
     ]
     try withTree(files, mode: .modules) { result in
-      #expect(result.detections.map(\.name) == ["MyModule"])
+      #expect(result.modules.map(\.name) == ["MyModule"])
       // @SharedObject / @Record files aren't even parsed: the modules pre-filter is @ExpoModule-only.
       #expect(result.stats.filesParsed == 1)
     }
     // The same tree in exports mode surfaces all three.
     try withTree(files, mode: .exports) { result in
-      #expect(result.detections.map(\.name).sorted() == ["Cache", "MyModule", "Options"])
+      #expect(result.modules.map(\.name).sorted() == ["Cache", "MyModule", "Options"])
       #expect(result.stats.filesParsed == 3)
     }
   }
@@ -287,7 +301,7 @@ struct ScanTests {
       (".git/hooks/Sneaky.swift", "@ExpoModule\nfinal class Sneaky {}"),
     ]) { result in
       // Only the file outside the pruned directories is seen at all.
-      #expect(result.detections.map(\.name) == ["RealModule"])
+      #expect(result.modules.map(\.name) == ["RealModule"])
       #expect(result.stats.filesScanned == 1)
       #expect(result.stats.filesParsed == 1)
     }
