@@ -9,11 +9,15 @@ import SwiftSyntax
 final class DetectionVisitor: SyntaxVisitor {
   private let file: String
   private let converter: SourceLocationConverter
+  /// Only these macros are recorded; the rest are ignored. Lets a `modules` scan report just
+  /// `@ExpoModule` while an `exports` scan covers them all.
+  private let detectedMacros: Set<DetectedMacro>
   private(set) var detections: [Detection] = []
 
-  init(file: String, tree: SourceFileSyntax) {
+  init(file: String, tree: SourceFileSyntax, detectedMacros: Set<DetectedMacro>) {
     self.file = file
     self.converter = SourceLocationConverter(fileName: file, tree: tree)
+    self.detectedMacros = detectedMacros
     super.init(viewMode: .sourceAccurate)
   }
 
@@ -52,7 +56,8 @@ final class DetectionVisitor: SyntaxVisitor {
   ) {
     for element in attributes {
       guard let attribute = element.as(AttributeSyntax.self),
-        let macro = DetectedMacro(rawValue: attribute.attributeName.trimmedDescription) else {
+        let macro = DetectedMacro(rawValue: attribute.attributeName.trimmedDescription),
+        detectedMacros.contains(macro) else {
         continue
       }
       let location = converter.location(for: node.positionAfterSkippingLeadingTrivia)

@@ -3,13 +3,20 @@ import Foundation
 import SwiftParser
 import Testing
 
-/// Parses a source string and returns the detections the visitor records for it. The file name is
-/// fixed so location assertions are stable; only `line`/`column` vary per test.
-private func detect(_ source: String) -> [Detection] {
+/// Parses a source string and returns the detections the visitor records for it, considering all
+/// macros by default. The file name is fixed so location assertions are stable; only `line`/`column`
+/// vary per test.
+private func detect(_ source: String, macros: Set<DetectedMacro> = Set(DetectedMacro.allCases)) -> [Detection] {
   let tree = Parser.parse(source: source)
-  let visitor = DetectionVisitor(file: "Test.swift", tree: tree)
+  let visitor = DetectionVisitor(file: "Test.swift", tree: tree, detectedMacros: macros)
   visitor.walk(tree)
   return visitor.detections
+}
+
+/// Convenience matching the production pre-filter: builds the regex for `macros` (all by default)
+/// and tests whether the source might contain one.
+private func mightContainMacro(in source: String, macros: Set<DetectedMacro> = Set(DetectedMacro.allCases)) -> Bool {
+  return mightContainMacro(in: source, prefilter: macroAttributeRegex(for: macros))
 }
 
 @Suite("Scanner detection")
@@ -219,7 +226,11 @@ struct MacroPrefilterTests {
 struct ScanTests {
   /// Creates a temporary directory tree of `(relativePath, contents)` files, runs `scan` on it, and
   /// removes the tree afterward.
-  private func withTree(_ files: [(String, String)], _ body: (ScanResult) throws -> Void) throws {
+  private func withTree(
+    _ files: [(String, String)],
+    mode: ScanMode = .modules,
+    _ body: (ScanResult) throws -> Void
+  ) throws {
     let fileManager = FileManager.default
     let root = fileManager.temporaryDirectory.appendingPathComponent("scanner-test-\(ProcessInfo.processInfo.globallyUniqueString)")
     defer { try? fileManager.removeItem(at: root) }
@@ -230,7 +241,7 @@ struct ScanTests {
       try contents.write(to: url, atomically: true, encoding: .utf8)
     }
 
-    try body(scan(paths: [root.path]))
+    try body(scan(paths: [root.path], mode: mode))
   }
 
   @Test
@@ -245,6 +256,25 @@ struct ScanTests {
       #expect(result.stats.filesScanned == 3)
       #expect(result.stats.filesParsed == 1)
       #expect(result.stats.durationMs >= 0)
+    }
+  }
+
+  @Test
+  func `modules mode reports only @ExpoModule, ignoring other macros`() throws {
+    let files = [
+      ("Module.swift", "@ExpoModule\nfinal class MyModule {}"),
+      ("Shared.swift", "@SharedObject\nfinal class Cache: SharedObject {}"),
+      ("Options.swift", "@Record\nstruct Options { var name: String }"),
+    ]
+    try withTree(files, mode: .modules) { result in
+      #expect(result.detections.map(\.name) == ["MyModule"])
+      // @SharedObject / @Record files aren't even parsed: the modules pre-filter is @ExpoModule-only.
+      #expect(result.stats.filesParsed == 1)
+    }
+    // The same tree in exports mode surfaces all three.
+    try withTree(files, mode: .exports) { result in
+      #expect(result.detections.map(\.name).sorted() == ["Cache", "MyModule", "Options"])
+      #expect(result.stats.filesParsed == 3)
     }
   }
 
