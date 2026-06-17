@@ -11,16 +11,22 @@ import Foundation
 
 let toolName = "ExpoModulesScanner"
 
-func printUsage() {
-  let usage = """
-    usage: \(toolName) <subcommand> <path> [<path> ...]
+let usageText = """
+  usage: \(toolName) <subcommand> <path> [<path> ...]
 
-    subcommands:
-      scan-modules   fast scan for top-level @ExpoModule types (autolinking)
-      scan-exports   deep scan of the full JS-exported surface (type generation)
+  subcommands:
+    scan-modules   fast scan for top-level @ExpoModule types (autolinking)
+    scan-exports   deep scan of the full JS-exported surface (type generation)
 
-    """
-  FileHandle.standardError.write(Data(usage.utf8))
+  options:
+    -h, --help     print this help and exit
+
+  """
+
+/// Prints the usage text to the given handle. Goes to stdout when help was explicitly requested
+/// (a successful action), stderr when it accompanies a usage error.
+func printUsage(to handle: FileHandle = .standardError) {
+  handle.write(Data(usageText.utf8))
 }
 
 func fail(_ message: String, usage: Bool = false, code: Int32 = 2) -> Never {
@@ -32,6 +38,12 @@ func fail(_ message: String, usage: Bool = false, code: Int32 = 2) -> Never {
 }
 
 var arguments = Array(CommandLine.arguments.dropFirst())
+
+// `-h`/`--help` anywhere is treated as a help request: print usage to stdout and exit 0.
+if arguments.contains(where: { $0 == "-h" || $0 == "--help" }) {
+  printUsage(to: .standardOutput)
+  exit(0)
+}
 
 guard !arguments.isEmpty else {
   printUsage()
