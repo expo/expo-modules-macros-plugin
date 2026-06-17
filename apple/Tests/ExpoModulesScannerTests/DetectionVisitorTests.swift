@@ -222,6 +222,7 @@ struct MacroPrefilterTests {
   }
 }
 
+
 @Suite("Scanning a directory")
 struct ScanTests {
   /// Creates a temporary directory tree of `(relativePath, contents)` files, runs `scanModules` on
@@ -261,6 +262,8 @@ struct ScanTests {
       ("Notes.swift", "// just a comment, no macros here"),
     ]) { result in
       #expect(result.modules.map(\.name) == ["MyModule"])
+      // Reported paths are absolute.
+      #expect(result.modules.first?.file.hasPrefix("/") == true)
       // All three .swift files are read; only the one mentioning a macro is parsed.
       #expect(result.stats.filesScanned == 3)
       #expect(result.stats.filesParsed == 1)
