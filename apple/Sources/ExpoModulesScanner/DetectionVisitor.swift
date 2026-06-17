@@ -39,6 +39,10 @@ final class DetectionVisitor: SyntaxVisitor {
   /// True when the declaration sits at file scope: its parent is a `CodeBlockItemSyntax` directly
   /// under the source file's top-level item list. Members of a type are nested in a
   /// `MemberBlockItemSyntax` instead, so they don't match.
+  ///
+  /// TODO: decide whether to support nested types. A macro on a type nested in another type/enum/
+  /// extension is valid Swift but missed here; supporting it means descending into type bodies and
+  /// recording the enclosing path for a qualified name (e.g. `Namespace.InnerModule`).
   private func isTopLevel(_ node: some SyntaxProtocol) -> Bool {
     guard let item = node.parent?.as(CodeBlockItemSyntax.self) else {
       return false
