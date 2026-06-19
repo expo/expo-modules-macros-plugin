@@ -127,7 +127,8 @@ internal struct JSFunction {
     if let accessor = fastDecodeAccessor(for: type) {
       return "let arg\(index) = try arguments.unownedValue(at: \(index)).\(accessor)()"
     }
-    return "let arg\(index) = try \(type).getDynamicType().cast(jsValue: arguments[\(index)], appContext: appContext) as! \(type)"
+    let exprType = expressionType(type)
+    return "let arg\(index) = try \(exprType).getDynamicType().cast(jsValue: arguments[\(index)], appContext: appContext) as! \(exprType)"
   }
 
   /// The `self.<name>(...)` call for the given arity. Slots `0..<arity` are passed their decoded
@@ -184,7 +185,7 @@ internal struct JSFunction {
     if fastDecodeAccessor(for: returnType) != nil {
       return ["return result.toJavaScriptValue(in: runtime)"]
     }
-    return ["return try \(returnType).getDynamicType().castToJS(result, appContext: appContext, in: runtime)"]
+    return ["return try \(expressionType(returnType)).getDynamicType().castToJS(result, appContext: appContext, in: runtime)"]
   }
 
   /// The `setProperty` statement that installs this function on the JS object. The decode-call-encode
@@ -295,7 +296,7 @@ internal struct JSProperty {
       getEncode = "return self.\(swiftName).toJavaScriptValue(in: runtime)"
     } else if let valueType {
       getEncode =
-        "return try \(valueType).getDynamicType().castToJS(self.\(swiftName), appContext: appContext, in: runtime)"
+        "return try \(expressionType(valueType)).getDynamicType().castToJS(self.\(swiftName), appContext: appContext, in: runtime)"
     } else {
       // No known type: fall back to converting whatever `self.<name>` is. This only happens when the
       // declaration has neither an annotation nor a literal default, which is rare for a stored var.
@@ -311,8 +312,9 @@ internal struct JSProperty {
       if let accessor = fastDecodeAccessor(for: valueType) {
         setDecode = "self.\(swiftName) = try arguments.unownedValue(at: 0).\(accessor)()"
       } else {
+        let exprType = expressionType(valueType)
         setDecode =
-          "self.\(swiftName) = try \(valueType).getDynamicType().cast(jsValue: arguments[0], appContext: appContext) as! \(valueType)"
+          "self.\(swiftName) = try \(exprType).getDynamicType().cast(jsValue: arguments[0], appContext: appContext) as! \(exprType)"
       }
       lines.append(
         accessorClosure(descriptorName, "set", usesAppContext: usesAppContext, body: "\(setDecode)\nreturn .undefined"))

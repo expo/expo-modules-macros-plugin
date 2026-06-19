@@ -116,6 +116,65 @@ struct RecordMacroTests {
   }
 
   @Test
+  func `Implicitly-unwrapped optional property normalizes to optional in cast and convert expressions`() {
+    assertExpansion(
+      """
+      @Record
+      struct Options {
+        var owner: MyRecord!
+      }
+      """,
+      expandedSource: """
+        struct Options {
+          var owner: MyRecord!
+
+          private func _assertTypesConformance() {
+            func owner<T: AnyArgument>(_: T.Type) {
+            }
+            owner(MyRecord.self)
+          }
+
+          public init() {
+          }
+
+          public init(owner: MyRecord! = nil) {
+            self.owner = owner
+          }
+
+          @JavaScriptActor
+          public static func from(object: borrowing JavaScriptObject, appContext: AppContext) throws -> Self {
+            let ownerJSValue = object.getProperty("owner")
+            let owner: MyRecord! = (ownerJSValue.isUndefined() || ownerJSValue.isNull()) ? nil : try MyRecord?.getDynamicType().cast(jsValue: ownerJSValue, appContext: appContext) as! MyRecord?
+            return Self(owner: owner)
+          }
+
+          public static func from(dictionary: [String: Any], appContext: AppContext) throws -> Self {
+            let ownerValue = dictionary["owner"]
+            let owner: MyRecord! = (ownerValue == nil || ownerValue! is NSNull) ? nil : try MyRecord?.getDynamicType().cast(ownerValue, appContext: appContext) as! MyRecord?
+            return Self(owner: owner)
+          }
+
+          public func toDictionary(appContext: AppContext? = nil) -> [String: Any] {
+            var dictionary: [String: Any] = [:]
+            dictionary["owner"] = self.owner
+            return dictionary
+          }
+
+          @JavaScriptActor
+          public func toObject(appContext: AppContext) throws -> JavaScriptObject {
+            let object = try appContext.runtime.createObject()
+            object.setProperty("owner", value: try MyRecord?.getDynamicType().convertToJS(self.owner, appContext: appContext))
+            return object
+          }
+        }
+
+        extension Options: Record {
+        }
+        """
+    )
+  }
+
+  @Test
   func `Non-primitive properties are checked in a single conformance-assertion peer`() {
     assertExpansion(
       """

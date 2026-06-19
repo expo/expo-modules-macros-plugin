@@ -336,6 +336,52 @@ struct ExpoModuleMacroTests {
   }
 
   @Test
+  func `Implicitly-unwrapped optional return normalizes to optional in the cast expression`() {
+    assertExpansion(
+      """
+      @ExpoModule
+      final class MyModule: Module {
+        @JS
+        func make(count: Int) -> MyRecord! { nil }
+      }
+      """,
+      expandedSource: """
+        final class MyModule: Module {
+          @JavaScriptActor
+          func make(count: Int) -> MyRecord! { nil }
+
+          private func _assertTypesConformance_make() {
+            func make<T: AnyArgument>(_: T.Type) {
+            }
+            make(MyRecord.self)
+          }
+
+          public static let _jsName = "MyModule"
+
+          public func _synthesizedDefinition() -> [AnyDefinition] {
+            return []
+          }
+
+          @JavaScriptActor
+          public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
+            object.setProperty("make") { [weak appContext, self] (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
+              guard let appContext else {
+                throw Exceptions.AppContextLost()
+              }
+              guard arguments.count == 1 else {
+                throw Exceptions.ArgumentsRangeMismatch((functionName: "make", received: arguments.count, required: 1, maximum: 1))
+              }
+              let arg0 = try arguments.unownedValue(at: 0).asInt()
+              let result = self.make(count: arg0)
+              return try MyRecord?.getDynamicType().castToJS(result, appContext: appContext, in: runtime)
+            }
+          }
+        }
+        """
+    )
+  }
+
+  @Test
   func `Static function emits a static conformance-assertion peer`() {
     assertExpansion(
       """
@@ -604,6 +650,57 @@ struct ExpoModuleMacroTests {
                 throw Exceptions.AppContextLost()
               }
               self.config = try MyRecord.getDynamicType().cast(jsValue: arguments[0], appContext: appContext) as! MyRecord
+              return .undefined
+            }
+            object.defineProperty("config", descriptor: configDescriptor)
+          }
+        }
+        """
+    )
+  }
+
+  @Test
+  func `Implicitly-unwrapped optional property normalizes the type to optional in the cast expressions`() {
+    assertExpansion(
+      """
+      @ExpoModule
+      final class MyModule: Module {
+        @JS
+        var config: MyRecord!
+      }
+      """,
+      expandedSource: """
+        final class MyModule: Module {
+          @JavaScriptActor
+          var config: MyRecord!
+
+          private func _assertTypesConformance_config() {
+            func config<T: AnyArgument>(_: T.Type) {
+            }
+            config(MyRecord.self)
+          }
+
+          public static let _jsName = "MyModule"
+
+          public func _synthesizedDefinition() -> [AnyDefinition] {
+            return []
+          }
+
+          @JavaScriptActor
+          public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
+            let configDescriptor = runtime.createObject()
+            configDescriptor.setProperty("enumerable", value: true)
+            configDescriptor.setProperty("get") { [weak appContext, self] (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
+              guard let appContext else {
+                throw Exceptions.AppContextLost()
+              }
+              return try MyRecord?.getDynamicType().castToJS(self.config, appContext: appContext, in: runtime)
+            }
+            configDescriptor.setProperty("set") { [weak appContext, self] (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
+              guard let appContext else {
+                throw Exceptions.AppContextLost()
+              }
+              self.config = try MyRecord?.getDynamicType().cast(jsValue: arguments[0], appContext: appContext) as! MyRecord?
               return .undefined
             }
             object.defineProperty("config", descriptor: configDescriptor)
