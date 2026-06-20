@@ -245,3 +245,14 @@ extension AttributeListSyntax {
     return nil
   }
 }
+
+/// A type spelled so it's valid in expression position (before `.getDynamicType()` or after `as!`).
+/// Implicitly-unwrapped optionals (`T!`) are only allowed in type-annotation position, so a trailing
+/// `!` is rewritten to `?` (`T!` and `T?` are both `Optional<T>`, which the dynamic-type / cast layer
+/// treats identically). Other type spellings pass through unchanged.
+internal func expressionType(_ type: String) -> String {
+  guard type.hasSuffix("!") else {
+    return type
+  }
+  return type.dropLast() + "?"
+}

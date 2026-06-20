@@ -316,7 +316,8 @@ private func jsObjectReadLines(properties: [RecordProperty]) -> [String] {
   var lines: [String] = []
   for property in properties {
     let valueVar = "\(property.name)JSValue"
-    let cast = "try \(property.type).getDynamicType().cast(jsValue: \(valueVar), appContext: appContext) as! \(property.type)"
+    let exprType = expressionType(property.type)
+    let cast = "try \(exprType).getDynamicType().cast(jsValue: \(valueVar), appContext: appContext) as! \(exprType)"
     lines.append("  let \(valueVar) = object.getProperty(\"\(property.name)\")")
     if property.isRequired {
       lines.append("  guard !\(valueVar).isUndefined() else {")
@@ -337,7 +338,8 @@ private func dictionaryReadLines(properties: [RecordProperty]) -> [String] {
   var lines: [String] = []
   for property in properties {
     let valueVar = "\(property.name)Value"
-    let cast = "try \(property.type).getDynamicType().cast(\(valueVar), appContext: appContext) as! \(property.type)"
+    let exprType = expressionType(property.type)
+    let cast = "try \(exprType).getDynamicType().cast(\(valueVar), appContext: appContext) as! \(exprType)"
     lines.append("  let \(valueVar) = dictionary[\"\(property.name)\"]")
     if property.isRequired {
       lines.append("  guard let \(valueVar) else {")
@@ -399,7 +401,7 @@ private func toObjectMethod(properties: [RecordProperty], inheritsRecord: Bool) 
     lines.append("  let object = try appContext.runtime.createObject()")
   }
   for property in properties {
-    lines.append("  object.setProperty(\"\(property.name)\", value: try \(property.type).getDynamicType().convertToJS(self.\(property.name), appContext: appContext))")
+    lines.append("  object.setProperty(\"\(property.name)\", value: try \(expressionType(property.type)).getDynamicType().convertToJS(self.\(property.name), appContext: appContext))")
   }
   lines.append("  return object")
   let body = lines.joined(separator: "\n")
