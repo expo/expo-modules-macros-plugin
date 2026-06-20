@@ -411,10 +411,11 @@ internal func buildDecorateJavaScriptObject(functions: [JSFunction], properties:
 
 /// The shared-object counterpart of `_decorateModule`. Core supplies the class `prototype`; this binds
 /// every `@JS func` and `@JS var` of the given shared-object type onto it. Because a shared object has a
-/// distinct native instance behind each JS object, the bindings are **static** and recover the typed
-/// receiver from the JS `this` per call (`try SharedObject.native(from: this.asObject(in: runtime), as: <Type>.self)`)
-/// rather than capturing a singleton `self`. The first parameter is `prototype` (not `object` as on
-/// `_decorateModule`) because it's the shared class prototype, not an instance. The constructor is
+/// distinct native instance behind each JS object, the bindings recover the typed receiver from the JS
+/// `this` per call (`try SharedObject.native(from: this.asObject(in: runtime), as: <Type>.self)`)
+/// rather than capturing a singleton `self`. Overrides the base `SharedObject` class method so core can
+/// dispatch to it through the concrete type's metatype. The first parameter is `prototype` (not `object`
+/// as on `_decorateModule`) because it's the shared class prototype, not an instance. The constructor is
 /// bound separately (see `JSConstructor.buildConstructor`). Only emitted when the type has at least one
 /// `@JS func`/`var`.
 internal func buildDecorateSharedObject(
@@ -423,7 +424,7 @@ internal func buildDecorateSharedObject(
   let body = decorateBody(functions: functions, properties: properties, receiver: .sharedObject(typeName: typeName))
   return """
     @JavaScriptActor
-    public static func _decorateSharedObject(prototype: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
+    public override class func _decorateSharedObject(prototype: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
     \(raw: body)
     }
     """

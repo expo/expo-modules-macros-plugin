@@ -1,9 +1,10 @@
 import SwiftSyntax
 
 /// A `@JS init` collected for direct JSI binding. A shared-object type has at most one (JS classes
-/// have a single constructor). Instead of a `Constructor { … }` DSL entry, the macro synthesizes a
-/// static `_constructSharedObject(...)` that decodes the JS arguments and returns a fresh instance;
-/// unlike the method/property bindings it produces the native instance rather than recovering one.
+/// have a single constructor). Instead of a `Constructor { … }` DSL entry, the macro synthesizes an
+/// override of `SharedObject._constructSharedObject(...)` that decodes the JS arguments and returns a
+/// fresh instance; unlike the method/property bindings it produces the native instance rather than
+/// recovering one.
 internal struct JSConstructor {
   let parameters: [FunctionParameterSyntax]
 
@@ -47,12 +48,14 @@ internal struct JSConstructor {
       .joined(separator: "\n")
   }
 
-  /// The static `_constructSharedObject` entry point the runtime calls to build an instance from JS
-  /// arguments, returning the concrete type. `this`/`appContext` may go unreferenced, which is harmless.
+  /// The `_constructSharedObject` entry point the runtime calls to build an instance from JS
+  /// arguments. Overrides the base `SharedObject` class method so core can dispatch to it through the
+  /// concrete type's metatype; the body returns the concrete instance, which promotes to the base
+  /// `SharedObject?` return type. `this`/`appContext` may go unreferenced, which is harmless.
   func buildConstructor(typeName: String) -> DeclSyntax {
     return """
       @JavaScriptActor
-      public static func _constructSharedObject(this: JavaScriptValue, arguments: borrowing JavaScriptValuesBuffer, in runtime: JavaScriptRuntime, appContext: AppContext) throws -> \(raw: typeName) {
+      public override class func _constructSharedObject(this: JavaScriptValue, arguments: borrowing JavaScriptValuesBuffer, in runtime: JavaScriptRuntime, appContext: AppContext) throws -> SharedObject? {
       \(raw: bodyStatements(typeName: typeName, indent: "  "))
       }
       """
