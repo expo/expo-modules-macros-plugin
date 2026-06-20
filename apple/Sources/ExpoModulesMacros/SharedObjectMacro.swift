@@ -41,35 +41,38 @@ public struct SharedObjectMacro: MemberMacro {
     let typeName = classDecl.name.text
     let jsName = jsNameArgument(of: node) ?? typeName
 
-    var entries: [String] = []
-    var sawConstructor = false
+    // `@JS func`s/`var`s and the `@JS init` are bound directly into the shared object's JS object by
+    // the synthesized `_decorateSharedObject` / `_constructSharedObject` rather than described with a
+    // `Function(...)` / `Property(...)` / `Constructor { … }` DSL entry, so they're collected here
+    // instead of appended to the `Class` block. The block keeps only non-`@JS` definitions (none are
+    // collected today), so it's empty when every member is `@JS`.
+    let entries: [String] = []
+    var functions: [JSFunction] = []
+    var properties: [JSProperty] = []
+    var constructor: JSConstructor?
 
     for member in classDecl.memberBlock.members {
       let decl = member.decl
 
       if let initDecl = decl.as(InitializerDeclSyntax.self),
         initDecl.attributes.firstAttribute(named: "JS") != nil {
-        if sawConstructor {
+        if constructor != nil {
           throw MacroExpansionErrorMessage(
             "@SharedObject classes can have at most one @JS initializer; JavaScript classes have a single constructor.")
         }
-        sawConstructor = true
-        entries.append(buildConstructorEntry(initDecl: initDecl, typeName: typeName))
+        constructor = JSConstructor(initDecl: initDecl)
         continue
       }
 
       if let funcDecl = decl.as(FunctionDeclSyntax.self),
         let attribute = funcDecl.attributes.firstAttribute(named: "JS") {
-        entries.append(
-          buildClassFunctionEntry(funcDecl: funcDecl, attribute: attribute, typeName: typeName))
+        functions.append(JSFunction(funcDecl: funcDecl, attribute: attribute))
         continue
       }
 
       if let varDecl = decl.as(VariableDeclSyntax.self),
         let attribute = varDecl.attributes.firstAttribute(named: "JS") {
-        entries.append(
-          contentsOf: buildClassPropertyEntries(
-            varDecl: varDecl, attribute: attribute, typeName: typeName))
+        properties.append(contentsOf: collectProperties(varDecl: varDecl, attribute: attribute))
       }
     }
 
@@ -78,13 +81,27 @@ public struct SharedObjectMacro: MemberMacro {
       ? "  return Class(\"\(jsName)\", \(typeName).self) {\n  }"
       : "  return Class(\"\(jsName)\", \(typeName).self) {\n\(lines)\n  }"
 
-    let method: DeclSyntax = """
+    var emitted: [DeclSyntax] = [
+      """
       public static func _synthesizedClassDefinition() -> ClassDefinition {
       \(raw: body)
       }
       """
+    ]
 
-    return [method]
+    // Direct JSI binding: one `_decorateSharedObject` that binds each `@JS func`/`var` onto the JS
+    // object (unwrapping the per-call receiver from `this`), and a `_constructSharedObject` that
+    // builds an instance from the `@JS init` arguments. Each is emitted only when it has something
+    // to do.
+    if !functions.isEmpty || !properties.isEmpty {
+      emitted.append(
+        buildDecorateSharedObject(functions: functions, properties: properties, typeName: typeName))
+    }
+    if let constructor {
+      emitted.append(constructor.buildConstructor(typeName: typeName))
+    }
+
+    return emitted
   }
 }
 
@@ -110,82 +127,4 @@ extension SharedObjectMacro: MemberAttributeMacro {
 
 private func inheritsFromSharedObject(_ classDecl: ClassDeclSyntax) -> Bool {
   return inheritsFromAny(classDecl, names: ["SharedObject"])
-}
-
-// MARK: - Class-scope entry builders
-
-private func buildClassFunctionEntry(
-  funcDecl: FunctionDeclSyntax,
-  attribute: AttributeSyntax,
-  typeName: String
-) -> String {
-  let swiftName = funcDecl.name.text
-  let jsName = jsNameArgument(of: attribute) ?? swiftName
-  let effects = funcDecl.signature.effectSpecifiers
-  let isAsync = effects?.asyncSpecifier != nil
-  let isThrowing = effects?.throwsClause?.throwsSpecifier != nil
-  let dslEntry = isAsync ? "AsyncFunction" : "Function"
-
-  let params = funcDecl.signature.parameterClause.parameters
-  let closureParamList: String
-  let callArgList: String
-  if params.isEmpty {
-    closureParamList = "(this: \(typeName))"
-    callArgList = ""
-  } else {
-    let typedParams = params.enumerated().map { index, param in
-      "_ arg\(index): \(param.type.trimmedDescription)"
-    }.joined(separator: ", ")
-    closureParamList = "(this: \(typeName), \(typedParams))"
-
-    callArgList = params.enumerated().map { index, param in
-      let label = param.firstName.text
-      return label == "_" ? "arg\(index)" : "\(label): arg\(index)"
-    }.joined(separator: ", ")
-  }
-
-  let awaitKeyword = isAsync ? "await " : ""
-  let tryKeyword = (isAsync || isThrowing) ? "try " : ""
-  let callExpr = "\(tryKeyword)\(awaitKeyword)this.\(swiftName)(\(callArgList))"
-
-  return "\(dslEntry)(\"\(jsName)\") { \(closureParamList) in \(callExpr) }"
-}
-
-private func buildClassPropertyEntries(
-  varDecl: VariableDeclSyntax,
-  attribute: AttributeSyntax,
-  typeName: String
-) -> [String] {
-  let jsNameOverride = jsNameArgument(of: attribute)
-
-  return varDecl.bindings.compactMap { binding in
-    guard let ident = binding.pattern.as(IdentifierPatternSyntax.self) else {
-      return nil
-    }
-    let swiftName = ident.identifier.text
-    let jsName = jsNameOverride ?? swiftName
-    return "Property(\"\(jsName)\") { (this: \(typeName)) in this.\(swiftName) }"
-  }
-}
-
-private func buildConstructorEntry(
-  initDecl: InitializerDeclSyntax,
-  typeName: String
-) -> String {
-  let params = initDecl.signature.parameterClause.parameters
-
-  if params.isEmpty {
-    return "Constructor { \(typeName)() }"
-  }
-
-  let argList = params.enumerated().map { index, param in
-    "_ arg\(index): \(param.type.trimmedDescription)"
-  }.joined(separator: ", ")
-
-  let callArgs = params.enumerated().map { index, param in
-    let label = param.firstName.text
-    return label == "_" ? "arg\(index)" : "\(label): arg\(index)"
-  }.joined(separator: ", ")
-
-  return "Constructor { (\(argList)) in \(typeName)(\(callArgs)) }"
 }

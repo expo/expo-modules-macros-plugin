@@ -102,7 +102,7 @@ struct SharedObjectMacroTests {
   }
 
   @Test
-  func `Sync method emits a class-scope Function entry`() {
+  func `Sync method binds via _decorateSharedObject, unwrapping the receiver from this`() {
     assertExpansion(
       """
       @SharedObject
@@ -118,9 +118,22 @@ struct SharedObjectMacroTests {
 
           public static func _synthesizedClassDefinition() -> ClassDefinition {
             return Class("Cache", Cache.self) {
-              Function("get") { (this: Cache, _ arg0: String) in
-                this.get(arg0)
+            }
+          }
+
+          @JavaScriptActor
+          public static func _decorateSharedObject(prototype: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
+            prototype.setProperty("get") { [weak appContext] (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
+              guard let appContext else {
+                throw Exceptions.AppContextLost()
               }
+              let _self = try SharedObject.native(from: this.asObject(in: runtime), as: Cache.self)
+              guard arguments.count == 1 else {
+                throw Exceptions.ArgumentsRangeMismatch((functionName: "get", received: arguments.count, required: 1, maximum: 1))
+              }
+              let arg0 = try arguments.unownedValue(at: 0).asString()
+              let result = _self.get(arg0)
+              return try String?.getDynamicType().castToJS(result, appContext: appContext, in: runtime)
             }
           }
         }
@@ -129,7 +142,7 @@ struct SharedObjectMacroTests {
   }
 
   @Test
-  func `Async method emits an AsyncFunction entry`() {
+  func `Async method binds through the async setProperty overload`() {
     assertExpansion(
       """
       @SharedObject
@@ -144,9 +157,18 @@ struct SharedObjectMacroTests {
 
           public static func _synthesizedClassDefinition() -> ClassDefinition {
             return Class("Cache", Cache.self) {
-              AsyncFunction("loadAsync") { (this: Cache) in
-                try await this.load()
+            }
+          }
+
+          @JavaScriptActor
+          public static func _decorateSharedObject(prototype: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
+            prototype.setProperty("loadAsync") { this, arguments in
+              let _self = try SharedObject.native(from: this.asObject(in: runtime), as: Cache.self)
+              guard arguments.count == 0 else {
+                throw Exceptions.ArgumentsRangeMismatch((functionName: "loadAsync", received: arguments.count, required: 0, maximum: 0))
               }
+              try await _self.load()
+              return .undefined
             }
           }
         }
@@ -155,7 +177,7 @@ struct SharedObjectMacroTests {
   }
 
   @Test
-  func `An optional property type is unwrapped to its core type in the assertion`() {
+  func `A non-primitive property routes through the dynamic converter and unwraps the receiver`() {
     assertExpansion(
       """
       @SharedObject
@@ -177,10 +199,29 @@ struct SharedObjectMacroTests {
 
           public static func _synthesizedClassDefinition() -> ClassDefinition {
             return Class("Cache", Cache.self) {
-              Property("owner") { (this: Cache) in
-                this.owner
-              }
             }
+          }
+
+          @JavaScriptActor
+          public static func _decorateSharedObject(prototype: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
+            let ownerDescriptor = runtime.createObject()
+            ownerDescriptor.setProperty("enumerable", value: true)
+            ownerDescriptor.setProperty("get") { [weak appContext] (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
+              guard let appContext else {
+                throw Exceptions.AppContextLost()
+              }
+              let _self = try SharedObject.native(from: this.asObject(in: runtime), as: Cache.self)
+              return try SomeType?.getDynamicType().castToJS(_self.owner, appContext: appContext, in: runtime)
+            }
+            ownerDescriptor.setProperty("set") { [weak appContext] (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
+              guard let appContext else {
+                throw Exceptions.AppContextLost()
+              }
+              let _self = try SharedObject.native(from: this.asObject(in: runtime), as: Cache.self)
+              _self.owner = try SomeType?.getDynamicType().cast(jsValue: arguments[0], appContext: appContext) as! SomeType?
+              return .undefined
+            }
+            prototype.defineProperty("owner", descriptor: ownerDescriptor)
           }
         }
         """
@@ -188,7 +229,7 @@ struct SharedObjectMacroTests {
   }
 
   @Test
-  func `Property emits a class-scope Property entry that takes the owner`() {
+  func `A primitive computed property binds a get-only accessor, unwrapping the receiver`() {
     assertExpansion(
       """
       @SharedObject
@@ -204,10 +245,18 @@ struct SharedObjectMacroTests {
 
           public static func _synthesizedClassDefinition() -> ClassDefinition {
             return Class("Cache", Cache.self) {
-              Property("size") { (this: Cache) in
-                this.size
-              }
             }
+          }
+
+          @JavaScriptActor
+          public static func _decorateSharedObject(prototype: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
+            let sizeDescriptor = runtime.createObject()
+            sizeDescriptor.setProperty("enumerable", value: true)
+            sizeDescriptor.setProperty("get") { (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
+              let _self = try SharedObject.native(from: this.asObject(in: runtime), as: Cache.self)
+              return _self.size.toJavaScriptValue(in: runtime)
+            }
+            prototype.defineProperty("size", descriptor: sizeDescriptor)
           }
         }
         """
@@ -215,7 +264,7 @@ struct SharedObjectMacroTests {
   }
 
   @Test
-  func `@JS init becomes a Constructor block`() {
+  func `@JS init binds a _constructSharedObject that builds the instance from JS arguments`() {
     assertExpansion(
       """
       @SharedObject
@@ -231,10 +280,16 @@ struct SharedObjectMacroTests {
 
           public static func _synthesizedClassDefinition() -> ClassDefinition {
             return Class("Cache", Cache.self) {
-              Constructor { (_ arg0: String) in
-                Cache(name: arg0)
-              }
             }
+          }
+
+          @JavaScriptActor
+          public static func _constructSharedObject(this: JavaScriptValue, arguments: borrowing JavaScriptValuesBuffer, in runtime: JavaScriptRuntime, appContext: AppContext) throws -> Cache {
+            guard arguments.count == 1 else {
+              throw Exceptions.ArgumentsRangeMismatch((functionName: "Cache", received: arguments.count, required: 1, maximum: 1))
+            }
+            let arg0 = try arguments.unownedValue(at: 0).asString()
+            return Cache(name: arg0)
           }
         }
         """
@@ -242,7 +297,7 @@ struct SharedObjectMacroTests {
   }
 
   @Test
-  func `Mixed members: init + method + property all flow into the Class block`() {
+  func `Mixed members: init constructs, method and property decorate`() {
     assertExpansion(
       """
       @SharedObject
@@ -268,15 +323,306 @@ struct SharedObjectMacroTests {
 
           public static func _synthesizedClassDefinition() -> ClassDefinition {
             return Class("Cache", Cache.self) {
-              Constructor { (_ arg0: String) in
-                Cache(name: arg0)
+            }
+          }
+
+          @JavaScriptActor
+          public static func _decorateSharedObject(prototype: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
+            prototype.setProperty("get") { [weak appContext] (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
+              guard let appContext else {
+                throw Exceptions.AppContextLost()
               }
-              Function("get") { (this: Cache, _ arg0: String) in
-                this.get(arg0)
+              let _self = try SharedObject.native(from: this.asObject(in: runtime), as: Cache.self)
+              guard arguments.count == 1 else {
+                throw Exceptions.ArgumentsRangeMismatch((functionName: "get", received: arguments.count, required: 1, maximum: 1))
               }
-              Property("size") { (this: Cache) in
-                this.size
+              let arg0 = try arguments.unownedValue(at: 0).asString()
+              let result = _self.get(arg0)
+              return try String?.getDynamicType().castToJS(result, appContext: appContext, in: runtime)
+            }
+            let sizeDescriptor = runtime.createObject()
+            sizeDescriptor.setProperty("enumerable", value: true)
+            sizeDescriptor.setProperty("get") { (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
+              let _self = try SharedObject.native(from: this.asObject(in: runtime), as: Cache.self)
+              return _self.size.toJavaScriptValue(in: runtime)
+            }
+            prototype.defineProperty("size", descriptor: sizeDescriptor)
+          }
+
+          @JavaScriptActor
+          public static func _constructSharedObject(this: JavaScriptValue, arguments: borrowing JavaScriptValuesBuffer, in runtime: JavaScriptRuntime, appContext: AppContext) throws -> Cache {
+            guard arguments.count == 1 else {
+              throw Exceptions.ArgumentsRangeMismatch((functionName: "Cache", received: arguments.count, required: 1, maximum: 1))
+            }
+            let arg0 = try arguments.unownedValue(at: 0).asString()
+            return Cache(name: arg0)
+          }
+        }
+        """
+    )
+  }
+
+  @Test
+  func `Trailing defaulted parameter branches the call through the unwrapped receiver`() {
+    assertExpansion(
+      """
+      @SharedObject
+      final class Cache: SharedObject {
+        @JS
+        func resize(width: Int, height: Int = 100) -> Bool { true }
+      }
+      """,
+      expandedSource: """
+        final class Cache: SharedObject {
+          @JavaScriptActor
+          func resize(width: Int, height: Int = 100) -> Bool { true }
+
+          public static func _synthesizedClassDefinition() -> ClassDefinition {
+            return Class("Cache", Cache.self) {
+            }
+          }
+
+          @JavaScriptActor
+          public static func _decorateSharedObject(prototype: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
+            prototype.setProperty("resize") { (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
+              let _self = try SharedObject.native(from: this.asObject(in: runtime), as: Cache.self)
+              guard arguments.count >= 1 && arguments.count <= 2 else {
+                throw Exceptions.ArgumentsRangeMismatch((functionName: "resize", received: arguments.count, required: 1, maximum: 2))
               }
+              let arg0 = try arguments.unownedValue(at: 0).asInt()
+              let result = switch arguments.count {
+              case 1:
+                _self.resize(width: arg0)
+              default:
+                let arg1 = try arguments.unownedValue(at: 1).asInt()
+                _self.resize(width: arg0, height: arg1)
+              }
+              return result.toJavaScriptValue(in: runtime)
+            }
+          }
+        }
+        """
+    )
+  }
+
+  @Test
+  func `Settable stored property binds a getter and setter through the unwrapped receiver`() {
+    assertExpansion(
+      """
+      @SharedObject
+      final class Cache: SharedObject {
+        @JS
+        var name: String = ""
+      }
+      """,
+      expandedSource: """
+        final class Cache: SharedObject {
+          @JavaScriptActor
+          var name: String = ""
+
+          public static func _synthesizedClassDefinition() -> ClassDefinition {
+            return Class("Cache", Cache.self) {
+            }
+          }
+
+          @JavaScriptActor
+          public static func _decorateSharedObject(prototype: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
+            let nameDescriptor = runtime.createObject()
+            nameDescriptor.setProperty("enumerable", value: true)
+            nameDescriptor.setProperty("get") { (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
+              let _self = try SharedObject.native(from: this.asObject(in: runtime), as: Cache.self)
+              return _self.name.toJavaScriptValue(in: runtime)
+            }
+            nameDescriptor.setProperty("set") { (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
+              let _self = try SharedObject.native(from: this.asObject(in: runtime), as: Cache.self)
+              _self.name = try arguments.unownedValue(at: 0).asString()
+              return .undefined
+            }
+            prototype.defineProperty("name", descriptor: nameDescriptor)
+          }
+        }
+        """
+    )
+  }
+
+  @Test
+  func `No-argument void method calls through and returns undefined`() {
+    assertExpansion(
+      """
+      @SharedObject
+      final class Cache: SharedObject {
+        @JS
+        func clear() {}
+      }
+      """,
+      expandedSource: """
+        final class Cache: SharedObject {
+          @JavaScriptActor
+          func clear() {}
+
+          public static func _synthesizedClassDefinition() -> ClassDefinition {
+            return Class("Cache", Cache.self) {
+            }
+          }
+
+          @JavaScriptActor
+          public static func _decorateSharedObject(prototype: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
+            prototype.setProperty("clear") { (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
+              let _self = try SharedObject.native(from: this.asObject(in: runtime), as: Cache.self)
+              guard arguments.count == 0 else {
+                throw Exceptions.ArgumentsRangeMismatch((functionName: "clear", received: arguments.count, required: 0, maximum: 0))
+              }
+              _self.clear()
+              return .undefined
+            }
+          }
+        }
+        """
+    )
+  }
+
+  @Test
+  func `No-argument init constructs without an arity guard body`() {
+    assertExpansion(
+      """
+      @SharedObject
+      final class Cache: SharedObject {
+        @JS
+        init() {}
+      }
+      """,
+      expandedSource: """
+        final class Cache: SharedObject {
+          @JavaScriptActor
+          init() {}
+
+          public static func _synthesizedClassDefinition() -> ClassDefinition {
+            return Class("Cache", Cache.self) {
+            }
+          }
+
+          @JavaScriptActor
+          public static func _constructSharedObject(this: JavaScriptValue, arguments: borrowing JavaScriptValuesBuffer, in runtime: JavaScriptRuntime, appContext: AppContext) throws -> Cache {
+            guard arguments.count == 0 else {
+              throw Exceptions.ArgumentsRangeMismatch((functionName: "Cache", received: arguments.count, required: 0, maximum: 0))
+            }
+            return Cache()
+          }
+        }
+        """
+    )
+  }
+
+  @Test
+  func `Non-primitive constructor argument decodes through the dynamic converter`() {
+    assertExpansion(
+      """
+      @SharedObject
+      final class Cache: SharedObject {
+        @JS
+        init(config: MyRecord) {}
+      }
+      """,
+      expandedSource: """
+        final class Cache: SharedObject {
+          @JavaScriptActor
+          init(config: MyRecord) {}
+
+          public static func _synthesizedClassDefinition() -> ClassDefinition {
+            return Class("Cache", Cache.self) {
+            }
+          }
+
+          @JavaScriptActor
+          public static func _constructSharedObject(this: JavaScriptValue, arguments: borrowing JavaScriptValuesBuffer, in runtime: JavaScriptRuntime, appContext: AppContext) throws -> Cache {
+            guard arguments.count == 1 else {
+              throw Exceptions.ArgumentsRangeMismatch((functionName: "Cache", received: arguments.count, required: 1, maximum: 1))
+            }
+            let arg0 = try MyRecord.getDynamicType().cast(jsValue: arguments[0], appContext: appContext) as! MyRecord
+            return Cache(config: arg0)
+          }
+        }
+        """
+    )
+  }
+
+  @Test
+  func `Implicitly-unwrapped constructor argument normalizes to optional in the cast expression`() {
+    assertExpansion(
+      """
+      @SharedObject
+      final class Cache: SharedObject {
+        @JS
+        init(config: MyRecord!) {}
+      }
+      """,
+      expandedSource: """
+        final class Cache: SharedObject {
+          @JavaScriptActor
+          init(config: MyRecord!) {}
+
+          public static func _synthesizedClassDefinition() -> ClassDefinition {
+            return Class("Cache", Cache.self) {
+            }
+          }
+
+          @JavaScriptActor
+          public static func _constructSharedObject(this: JavaScriptValue, arguments: borrowing JavaScriptValuesBuffer, in runtime: JavaScriptRuntime, appContext: AppContext) throws -> Cache {
+            guard arguments.count == 1 else {
+              throw Exceptions.ArgumentsRangeMismatch((functionName: "Cache", received: arguments.count, required: 1, maximum: 1))
+            }
+            let arg0 = try MyRecord?.getDynamicType().cast(jsValue: arguments[0], appContext: appContext) as! MyRecord?
+            return Cache(config: arg0)
+          }
+        }
+        """
+    )
+  }
+
+  @Test
+  func `Implicitly-unwrapped method argument and return normalize to optional through the receiver`() {
+    assertExpansion(
+      """
+      @SharedObject
+      final class Cache: SharedObject {
+        @JS
+        func resolve(_ input: MyRecord!) -> MyRecord! { input }
+      }
+      """,
+      expandedSource: """
+        final class Cache: SharedObject {
+          @JavaScriptActor
+          func resolve(_ input: MyRecord!) -> MyRecord! { input }
+
+          private func _assertTypesConformance_resolve() {
+            func resolve<T: AnyArgument>(_: T.Type) {
+            }
+            resolve(MyRecord.self)
+          }
+
+          public static func _synthesizedClassDefinition() -> ClassDefinition {
+            return Class("Cache", Cache.self) {
+            }
+          }
+
+          @JavaScriptActor
+          public static func _decorateSharedObject(prototype: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
+            prototype.setProperty("resolve") { [weak appContext] (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
+              guard let appContext else {
+                throw Exceptions.AppContextLost()
+              }
+              let _self = try SharedObject.native(from: this.asObject(in: runtime), as: Cache.self)
+              guard arguments.count >= 0 && arguments.count <= 1 else {
+                throw Exceptions.ArgumentsRangeMismatch((functionName: "resolve", received: arguments.count, required: 0, maximum: 1))
+              }
+              let result = switch arguments.count {
+              case 0:
+                _self.resolve(nil)
+              default:
+                let arg0 = try MyRecord?.getDynamicType().cast(jsValue: arguments[0], appContext: appContext) as! MyRecord?
+                _self.resolve(arg0)
+              }
+              return try MyRecord?.getDynamicType().castToJS(result, appContext: appContext, in: runtime)
             }
           }
         }
