@@ -2,14 +2,19 @@ import Foundation
 import SwiftParser
 import SwiftSyntax
 
-/// Walks `paths`, parses each `.swift` file that might contain one of `macros` (the pre-filter), and
-/// returns every detection (in file then source order) with the run's stats. The shared core every
-/// scan command builds on; each command projects these detections into its own output shape.
-func collectDetections(paths: [String], macros: Set<DetectedMacro>) -> (detections: [Detection], stats: ScanStats) {
+/// Walks `paths`, and for each `.swift` file that might contain one of `macros` (the pre-filter passes
+/// it), reads the source and hands it to `process` along with the file path. Returns the run's stats.
+/// The shared core every scan command builds on: the walk, read, pre-filter, and stats are identical;
+/// only what each command does per parsed file differs (`scan-modules` collects `Detection`s,
+/// `scan-exports` walks a `SurfaceVisitor`), and that lives in `process`.
+func scanFiles(
+  paths: [String],
+  macros: Set<DetectedMacro>,
+  process: (_ source: String, _ file: String) -> Void
+) -> ScanStats {
   let clock = ContinuousClock()
   let start = clock.now
 
-  var detections: [Detection] = []
   var filesScanned = 0
   var filesParsed = 0
 
@@ -29,13 +34,24 @@ func collectDetections(paths: [String], macros: Set<DetectedMacro>) -> (detectio
       continue
     }
     filesParsed += 1
-    detections.append(contentsOf: detect(source: source, file: file, macros: macros))
+    process(source, file)
   }
 
   let elapsed = (clock.now - start).components
   let durationMs = Double(elapsed.seconds) * 1000 + Double(elapsed.attoseconds) / 1e15
 
-  return (detections, ScanStats(filesScanned: filesScanned, filesParsed: filesParsed, durationMs: durationMs))
+  return ScanStats(filesScanned: filesScanned, filesParsed: filesParsed, durationMs: durationMs)
+}
+
+/// Walks `paths`, parses each `.swift` file that might contain one of `macros`, and returns every
+/// detection (in file then source order) with the run's stats — the shape `scan-modules` projects.
+/// A thin layer over `scanFiles` that accumulates the per-file detections.
+func collectDetections(paths: [String], macros: Set<DetectedMacro>) -> (detections: [Detection], stats: ScanStats) {
+  var detections: [Detection] = []
+  let stats = scanFiles(paths: paths, macros: macros) { source, file in
+    detections.append(contentsOf: detect(source: source, file: file, macros: macros))
+  }
+  return (detections, stats)
 }
 
 /// Parses one source string and returns its detections for the given macro set. The unit of work the

@@ -61,9 +61,10 @@ case "scan-modules":
   exit(Scanner.runModules(paths: paths))
 
 case "scan-exports":
-  // Deep extraction (members, record fields, the JS surface of each type) lands in a separate PR.
-  // The subcommand is recognized so the CLI surface is stable, but it isn't implemented yet.
-  fail("scan-exports is not yet implemented", code: 1)
+  guard !paths.isEmpty else {
+    fail("scan-exports requires at least one path", usage: true)
+  }
+  exit(Scanner.runExports(paths: paths))
 
 default:
   fail("unknown subcommand '\(subcommand)'", usage: true)
