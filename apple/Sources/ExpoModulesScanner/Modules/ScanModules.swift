@@ -7,8 +7,8 @@ import Foundation
 /// `@testable import`, and the CLI only needs these entries, so nothing else is exposed.
 public enum Scanner {
   /// Runs the `scan-modules` command over `paths`, prints the JSON report to stdout, and returns a
-  /// process exit code: `0` on success, `1` if encoding fails. (`scan-exports` will get its own
-  /// `run`-style entry returning its own result type when implemented.)
+  /// process exit code: `0` on success, `1` if encoding fails. (The deep `scan-exports` command has
+  /// its own `runExports` entry returning its own result type.)
   public static func runModules(paths: [String]) -> Int32 {
     let result = scanModules(paths: paths)
 
@@ -30,7 +30,7 @@ public enum Scanner {
 /// register a module: the Swift class name, the JS name it registers under, and the file it's in.
 /// The richer fields the visitor captures (declaration kind, raw macro arguments, line/column) are
 /// dropped here — they're redundant for this command (the macro is always `@ExpoModule` on a class)
-/// and belong to the deep `scan-exports` surface instead.
+/// and the deep `scan-exports` surface carries the richer per-member detail instead.
 struct ScannedModule: Codable, Equatable {
   /// The Swift class name the module is declared as.
   let name: String
@@ -45,8 +45,8 @@ struct ScannedModule: Codable, Equatable {
 }
 
 /// The `scan-modules` result: the detected modules plus the stats describing the run. Encoded as the
-/// command's JSON output. (`scan-exports` will return its own shape when implemented; the two
-/// commands serve different consumers and aren't expected to share an envelope.)
+/// command's JSON output. (`scan-exports` returns its own `ScanExportsResult` shape; the two commands
+/// serve different consumers and don't share an envelope.)
 struct ScanModulesResult: Codable, Equatable {
   let modules: [ScannedModule]
   let stats: ScanStats

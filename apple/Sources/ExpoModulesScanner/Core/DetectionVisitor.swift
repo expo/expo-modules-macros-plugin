@@ -95,8 +95,9 @@ private func arguments(of attribute: AttributeSyntax) -> [MacroArgument] {
 
 /// The first string-literal argument of an attribute, e.g. `@JS("doWork")` -> "doWork". Returns
 /// `nil` when there's no argument or it isn't a plain string literal. (Same shape the
-/// `jsNameArgument` helper reads inside the macros.)
-private func stringArgument(of attribute: AttributeSyntax) -> String? {
+/// `jsNameArgument` helper reads inside the macros.) Shared with the `scan-exports` surface visitor,
+/// which reads the same JS-name override off `@JS`/`@ExpoModule`/`@SharedObject`.
+func stringArgument(of attribute: AttributeSyntax) -> String? {
   guard let args = attribute.arguments?.as(LabeledExprListSyntax.self),
     let first = args.first,
     first.label == nil,
