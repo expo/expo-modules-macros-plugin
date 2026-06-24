@@ -42,14 +42,12 @@ internal struct JSConstructor {
       .joined(separator: "\n")
   }
 
-  /// The `_constructSharedObject` entry point the runtime calls to build an instance from JS
-  /// arguments. Overrides the base `SharedObject` class method so core can dispatch to it through the
-  /// concrete type's metatype; the body returns the concrete instance, which promotes to the base
-  /// `SharedObject?` return type. `this`/`appContext` may go unreferenced, which is harmless.
+  /// Builds an instance from the JS arguments. Overrides the base `SharedObject` class method; returns
+  /// the concrete instance, which promotes to the base `SharedObject?` return type.
   func buildConstructor(typeName: String) -> DeclSyntax {
     return """
       @JavaScriptActor
-      public override class func _constructSharedObject(this: JavaScriptValue, arguments: borrowing JavaScriptValuesBuffer, in runtime: JavaScriptRuntime, appContext: AppContext) throws -> SharedObject? {
+      public override class func _constructSharedObject(this: JavaScriptValue, arguments: borrowing JavaScriptValuesBuffer, in runtime: JavaScriptRuntime) throws -> SharedObject? {
       \(raw: bodyStatements(typeName: typeName, indent: "  "))
       }
       """
