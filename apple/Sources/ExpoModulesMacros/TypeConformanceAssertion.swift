@@ -1,19 +1,26 @@
 import SwiftSyntax
 
 /// The protocol that every type crossing the JS boundary must conform to. Centralized here so the
-/// eventual rename (this is a placeholder name) is a single edit, and shared by every macro that
-/// asserts the conformance (`@JS`, `@Record`, …).
+/// eventual rename (this is a placeholder name) is a single edit, and shared by the macros whose
+/// generated conversions go through the dynamic-type API (`@Record`, `@Event`).
 internal let jsConvertibleProtocolName = "AnyArgument"
+
+/// The constraint a `@JS` boundary type must satisfy, by direction: an argument (and a settable
+/// property's incoming value) is decoded, so it must be `JavaScriptDecodable`; a return value (and a
+/// property's outgoing value) is encoded, so it must be `JavaScriptEncodable`. Asserting each
+/// direction on its own keeps a decode-only or encode-only type from being over-constrained, and
+/// surfaces a missing conformance as a clear "requires that '…' conform to …" diagnostic on the
+/// member instead of an opaque error inside the generated closure.
+internal let javaScriptDecodableProtocolName = "JavaScriptDecodable"
+internal let javaScriptEncodableProtocolName = "JavaScriptEncodable"
 
 /// The protocol a type must conform to for `self.emit(event:…)` to resolve; core conforms
 /// `BaseModule` and `SharedObject` to it. Asserted by `@Event` so attaching it to a type that can't
 /// emit fails with a conformance diagnostic instead of an opaque "no member 'emit'" error.
 internal let eventEmitterProtocolName = "EventEmitter"
 
-/// Types we never assert because they're statically known to conform and never reach the dynamic
-/// converter: the JS primitives. Asserting them would only add noise to the expansion. Kept here
-/// (rather than reusing the decode-path's `fastDecodeAccessor`) because "known-to-conform" is a
-/// concept that belongs with the assertion logic, not with how a value is decoded.
+/// Types we never assert because they're statically known to conform: the JS primitives. Asserting
+/// them would only add noise to the expansion.
 private let knownConformingPrimitives: Set<String> = ["Bool", "Int", "Double", "String"]
 
 /// One member's worth of conformance assertion: a name (the member it stands for) and the declared
@@ -27,27 +34,55 @@ internal struct ConformanceAssertion {
   let types: [String]
 }
 
-/// A single conformance-assertion peer for a `@JS` member: a never-called `private func` whose body
-/// statically asserts the member's boundary types conform. The assertion is compile-time only — the
-/// function is never invoked, but Swift still type-checks its body, so a non-conforming type becomes
-/// a compile error. Emitted as a **peer** of the user's declaration, so that error lands on the
-/// user's own member rather than on the enclosing macro.
+/// A directional conformance-assertion peer for a `@JS` member: a never-called `private func` whose
+/// body asserts each argument type is `JavaScriptDecodable` and the return/getter type is
+/// `JavaScriptEncodable`, matching how the generated binding converts each (decode on the way in,
+/// encode on the way out). The check is a single member-named nested helper with one `A0…` generic
+/// parameter per non-primitive argument and a single `Return` parameter for the value, called once with
+/// every type's metatype; naming the helper after the member puts the member in the compiler's
+/// diagnostic, and the per-slot constraint reports the offending type against the protocol for *its*
+/// direction.
 ///
-/// `isStatic` makes the peer `static`, mirroring a `static`/`class` member so it's emitted in the
-/// right metatype context (a peer of a type-level member can't be an instance method). `class func`
-/// members collapse to `static` here too: the peer is private and never called or overridden, so
-/// `static` is always sufficient.
-///
-/// Returns `nil` when nothing is left to assert (every type was a known-conforming primitive, or the
-/// list was empty), so the caller emits nothing in that case.
-internal func typeConformanceAssertion(for assertion: ConformanceAssertion, isStatic: Bool) -> DeclSyntax? {
-  guard let body = conformanceAssertionBody(assertion) else {
+/// `decodableTypes` are the argument types (and a settable property's value type); `encodableType` is
+/// the single return type (or a property's value type on read), or `nil` when there's none. Primitives
+/// are dropped from each; when nothing is left in either, returns `nil` so the caller emits no peer.
+/// `isStatic` mirrors a `static`/`class` member so the peer sits in the right metatype context.
+internal func directionalConformanceAssertion(
+  name: String,
+  decodableTypes: [String],
+  encodableType: String?,
+  isStatic: Bool
+) -> DeclSyntax? {
+  let decodables = distinctAssertableTypes(decodableTypes)
+  let encodable = encodableType.flatMap(assertableBoundaryType)
+  guard !decodables.isEmpty || encodable != nil else {
     return nil
   }
+
+  // Build the generic parameter list and the matching call arguments in lockstep: one `A0…` slot
+  // constrained `JavaScriptDecodable` per argument, and a single `Return` slot constrained
+  // `JavaScriptEncodable` for the return/getter value (there's only ever one, so it isn't indexed).
+  var parameters: [String] = []
+  var typeParameters: [String] = []
+  var arguments: [String] = []
+  for (index, type) in decodables.enumerated() {
+    parameters.append("A\(index): \(javaScriptDecodableProtocolName)")
+    typeParameters.append("_: A\(index).Type")
+    arguments.append("\(type).self")
+  }
+  if let encodable {
+    parameters.append("Return: \(javaScriptEncodableProtocolName)")
+    typeParameters.append("_: Return.Type")
+    arguments.append("\(encodable).self")
+  }
+
+  let helper = "func \(name)<\(parameters.joined(separator: ", "))>(\(typeParameters.joined(separator: ", "))) {}"
+  let call = "\(name)(\(arguments.joined(separator: ", ")))"
   let staticKeyword = isStatic ? "static " : ""
   return """
-    private \(raw: staticKeyword)func _assertTypesConformance_\(raw: assertion.name)() {
-    \(raw: body)
+    private \(raw: staticKeyword)func _assertTypesConformance_\(raw: name)() {
+    \(raw: helper)
+    \(raw: call)
     }
     """
 }
@@ -86,14 +121,7 @@ internal func assertableBoundaryType(_ type: String) -> String? {
 /// puts the member's name in the compiler's conformance diagnostic. Returns `nil` when every type was
 /// a known-conforming primitive or the list was empty.
 private func conformanceAssertionBody(_ assertion: ConformanceAssertion) -> String? {
-  // Unwrap top-level optionals to the core type, then dedup so each type is asserted once even when
-  // it appears more than once; skip known primitives.
-  var seen: Set<String> = []
-  var distinct: [String] = []
-  for type in assertion.types.map(unwrappedOptional)
-  where !knownConformingPrimitives.contains(type) && seen.insert(type).inserted {
-    distinct.append(type)
-  }
+  let distinct = distinctAssertableTypes(assertion.types)
   guard !distinct.isEmpty else {
     return nil
   }
@@ -101,6 +129,19 @@ private func conformanceAssertionBody(_ assertion: ConformanceAssertion) -> Stri
   var lines = ["func \(assertion.name)<T: \(jsConvertibleProtocolName)>(_: T.Type) {}"]
   lines.append(contentsOf: distinct.map { "\(assertion.name)(\($0).self)" })
   return lines.joined(separator: "\n")
+}
+
+/// Normalizes a list of boundary types for assertion: unwraps each to its core type (trailing
+/// optionals stripped), drops the known-conforming primitives that never need asserting, and dedups
+/// while preserving first-seen order so a type is asserted once even when it appears more than once.
+private func distinctAssertableTypes(_ types: [String]) -> [String] {
+  var seen: Set<String> = []
+  var distinct: [String] = []
+  for type in types.map(unwrappedOptional)
+  where !knownConformingPrimitives.contains(type) && seen.insert(type).inserted {
+    distinct.append(type)
+  }
+  return distinct
 }
 
 /// Strips every trailing optional marker (`?`/`!`) so the assertion targets the core wrapped type.

@@ -123,17 +123,14 @@ struct SharedObjectMacroTests {
 
           @JavaScriptActor
           public override class func _decorateSharedObject(prototype: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
-            prototype.setProperty("get") { [weak appContext] (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
-              guard let appContext else {
-                throw Exceptions.AppContextLost()
-              }
+            prototype.setProperty("get") { (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
               let _self = try SharedObject.native(from: this.asObject(in: runtime), as: Cache.self)
               guard arguments.count == 1 else {
                 throw Exceptions.ArgumentsRangeMismatch((functionName: "get", received: arguments.count, required: 1, maximum: 1))
               }
-              let arg0 = try arguments.unownedValue(at: 0).asString()
+              let arg0 = try String.decode(arguments.unownedValue(at: 0), in: runtime)
               let result = _self.get(arg0)
-              return try String?.getDynamicType().castToJS(result, appContext: appContext, in: runtime)
+              return try String?.encode(result, in: runtime)
             }
           }
         }
@@ -192,9 +189,9 @@ struct SharedObjectMacroTests {
           var owner: SomeType!
 
           private func _assertTypesConformance_owner() {
-            func owner<T: AnyArgument>(_: T.Type) {
+            func owner<A0: JavaScriptDecodable, Return: JavaScriptEncodable>(_: A0.Type, _: Return.Type) {
             }
-            owner(SomeType.self)
+            owner(SomeType.self, SomeType.self)
           }
 
           public static func _synthesizedClassDefinition() -> ClassDefinition {
@@ -206,19 +203,13 @@ struct SharedObjectMacroTests {
           public override class func _decorateSharedObject(prototype: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
             let ownerDescriptor = runtime.createObject()
             ownerDescriptor.setProperty("enumerable", value: true)
-            ownerDescriptor.setProperty("get") { [weak appContext] (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
-              guard let appContext else {
-                throw Exceptions.AppContextLost()
-              }
+            ownerDescriptor.setProperty("get") { (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
               let _self = try SharedObject.native(from: this.asObject(in: runtime), as: Cache.self)
-              return try SomeType?.getDynamicType().castToJS(_self.owner, appContext: appContext, in: runtime)
+              return try SomeType?.encode(_self.owner, in: runtime)
             }
-            ownerDescriptor.setProperty("set") { [weak appContext] (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
-              guard let appContext else {
-                throw Exceptions.AppContextLost()
-              }
+            ownerDescriptor.setProperty("set") { (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
               let _self = try SharedObject.native(from: this.asObject(in: runtime), as: Cache.self)
-              _self.owner = try SomeType?.getDynamicType().cast(jsValue: arguments[0], appContext: appContext) as! SomeType?
+              _self.owner = try SomeType?.decode(arguments.unownedValue(at: 0), in: runtime)
               return .undefined
             }
             prototype.defineProperty("owner", descriptor: ownerDescriptor)
@@ -254,7 +245,7 @@ struct SharedObjectMacroTests {
             sizeDescriptor.setProperty("enumerable", value: true)
             sizeDescriptor.setProperty("get") { (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
               let _self = try SharedObject.native(from: this.asObject(in: runtime), as: Cache.self)
-              return _self.size.toJavaScriptValue(in: runtime)
+              return try Int.encode(_self.size, in: runtime)
             }
             prototype.defineProperty("size", descriptor: sizeDescriptor)
           }
@@ -288,7 +279,7 @@ struct SharedObjectMacroTests {
             guard arguments.count == 1 else {
               throw Exceptions.ArgumentsRangeMismatch((functionName: "Cache", received: arguments.count, required: 1, maximum: 1))
             }
-            let arg0 = try arguments.unownedValue(at: 0).asString()
+            let arg0 = try String.decode(arguments.unownedValue(at: 0), in: runtime)
             return Cache(name: arg0)
           }
         }
@@ -328,23 +319,20 @@ struct SharedObjectMacroTests {
 
           @JavaScriptActor
           public override class func _decorateSharedObject(prototype: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
-            prototype.setProperty("get") { [weak appContext] (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
-              guard let appContext else {
-                throw Exceptions.AppContextLost()
-              }
+            prototype.setProperty("get") { (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
               let _self = try SharedObject.native(from: this.asObject(in: runtime), as: Cache.self)
               guard arguments.count == 1 else {
                 throw Exceptions.ArgumentsRangeMismatch((functionName: "get", received: arguments.count, required: 1, maximum: 1))
               }
-              let arg0 = try arguments.unownedValue(at: 0).asString()
+              let arg0 = try String.decode(arguments.unownedValue(at: 0), in: runtime)
               let result = _self.get(arg0)
-              return try String?.getDynamicType().castToJS(result, appContext: appContext, in: runtime)
+              return try String?.encode(result, in: runtime)
             }
             let sizeDescriptor = runtime.createObject()
             sizeDescriptor.setProperty("enumerable", value: true)
             sizeDescriptor.setProperty("get") { (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
               let _self = try SharedObject.native(from: this.asObject(in: runtime), as: Cache.self)
-              return _self.size.toJavaScriptValue(in: runtime)
+              return try Int.encode(_self.size, in: runtime)
             }
             prototype.defineProperty("size", descriptor: sizeDescriptor)
           }
@@ -354,7 +342,7 @@ struct SharedObjectMacroTests {
             guard arguments.count == 1 else {
               throw Exceptions.ArgumentsRangeMismatch((functionName: "Cache", received: arguments.count, required: 1, maximum: 1))
             }
-            let arg0 = try arguments.unownedValue(at: 0).asString()
+            let arg0 = try String.decode(arguments.unownedValue(at: 0), in: runtime)
             return Cache(name: arg0)
           }
         }
@@ -389,15 +377,15 @@ struct SharedObjectMacroTests {
               guard arguments.count >= 1 && arguments.count <= 2 else {
                 throw Exceptions.ArgumentsRangeMismatch((functionName: "resize", received: arguments.count, required: 1, maximum: 2))
               }
-              let arg0 = try arguments.unownedValue(at: 0).asInt()
+              let arg0 = try Int.decode(arguments.unownedValue(at: 0), in: runtime)
               let result = switch arguments.count {
               case 1:
                 _self.resize(width: arg0)
               default:
-                let arg1 = try arguments.unownedValue(at: 1).asInt()
+                let arg1 = try Int.decode(arguments.unownedValue(at: 1), in: runtime)
                 _self.resize(width: arg0, height: arg1)
               }
-              return result.toJavaScriptValue(in: runtime)
+              return try Bool.encode(result, in: runtime)
             }
           }
         }
@@ -431,11 +419,11 @@ struct SharedObjectMacroTests {
             nameDescriptor.setProperty("enumerable", value: true)
             nameDescriptor.setProperty("get") { (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
               let _self = try SharedObject.native(from: this.asObject(in: runtime), as: Cache.self)
-              return _self.name.toJavaScriptValue(in: runtime)
+              return try String.encode(_self.name, in: runtime)
             }
             nameDescriptor.setProperty("set") { (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
               let _self = try SharedObject.native(from: this.asObject(in: runtime), as: Cache.self)
-              _self.name = try arguments.unownedValue(at: 0).asString()
+              _self.name = try String.decode(arguments.unownedValue(at: 0), in: runtime)
               return .undefined
             }
             prototype.defineProperty("name", descriptor: nameDescriptor)
@@ -538,7 +526,7 @@ struct SharedObjectMacroTests {
             guard arguments.count == 1 else {
               throw Exceptions.ArgumentsRangeMismatch((functionName: "Cache", received: arguments.count, required: 1, maximum: 1))
             }
-            let arg0 = try MyRecord.getDynamicType().cast(jsValue: arguments[0], appContext: appContext) as! MyRecord
+            let arg0 = try MyRecord.decode(arguments.unownedValue(at: 0), in: runtime)
             return Cache(config: arg0)
           }
         }
@@ -571,7 +559,7 @@ struct SharedObjectMacroTests {
             guard arguments.count == 1 else {
               throw Exceptions.ArgumentsRangeMismatch((functionName: "Cache", received: arguments.count, required: 1, maximum: 1))
             }
-            let arg0 = try MyRecord?.getDynamicType().cast(jsValue: arguments[0], appContext: appContext) as! MyRecord?
+            let arg0 = try MyRecord?.decode(arguments.unownedValue(at: 0), in: runtime)
             return Cache(config: arg0)
           }
         }
@@ -595,9 +583,9 @@ struct SharedObjectMacroTests {
           func resolve(_ input: MyRecord!) -> MyRecord! { input }
 
           private func _assertTypesConformance_resolve() {
-            func resolve<T: AnyArgument>(_: T.Type) {
+            func resolve<A0: JavaScriptDecodable, Return: JavaScriptEncodable>(_: A0.Type, _: Return.Type) {
             }
-            resolve(MyRecord.self)
+            resolve(MyRecord.self, MyRecord.self)
           }
 
           public static func _synthesizedClassDefinition() -> ClassDefinition {
@@ -607,10 +595,7 @@ struct SharedObjectMacroTests {
 
           @JavaScriptActor
           public override class func _decorateSharedObject(prototype: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
-            prototype.setProperty("resolve") { [weak appContext] (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
-              guard let appContext else {
-                throw Exceptions.AppContextLost()
-              }
+            prototype.setProperty("resolve") { (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
               let _self = try SharedObject.native(from: this.asObject(in: runtime), as: Cache.self)
               guard arguments.count >= 0 && arguments.count <= 1 else {
                 throw Exceptions.ArgumentsRangeMismatch((functionName: "resolve", received: arguments.count, required: 0, maximum: 1))
@@ -619,10 +604,10 @@ struct SharedObjectMacroTests {
               case 0:
                 _self.resolve(nil)
               default:
-                let arg0 = try MyRecord?.getDynamicType().cast(jsValue: arguments[0], appContext: appContext) as! MyRecord?
+                let arg0 = try MyRecord?.decode(arguments.unownedValue(at: 0), in: runtime)
                 _self.resolve(arg0)
               }
-              return try MyRecord?.getDynamicType().castToJS(result, appContext: appContext, in: runtime)
+              return try MyRecord?.encode(result, in: runtime)
             }
           }
         }
@@ -687,7 +672,7 @@ struct ExpoModuleClassesTests {
                 throw Exceptions.ArgumentsRangeMismatch((functionName: "ping", received: arguments.count, required: 0, maximum: 0))
               }
               let result = self.ping()
-              return result.toJavaScriptValue(in: runtime)
+              return try String.encode(result, in: runtime)
             }
           }
         }

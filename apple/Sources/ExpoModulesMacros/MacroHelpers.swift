@@ -246,10 +246,11 @@ extension AttributeListSyntax {
   }
 }
 
-/// A type spelled so it's valid in expression position (before `.getDynamicType()` or after `as!`).
-/// Implicitly-unwrapped optionals (`T!`) are only allowed in type-annotation position, so a trailing
-/// `!` is rewritten to `?` (`T!` and `T?` are both `Optional<T>`, which the dynamic-type / cast layer
-/// treats identically). Other type spellings pass through unchanged.
+/// A type spelled so it's valid in expression position (before `.decode`/`.encode`, before
+/// `.getDynamicType()`, or after `as!`). Implicitly-unwrapped optionals (`T!`) are only allowed in
+/// type-annotation position, so a trailing `!` is rewritten to `?` (`T!` and `T?` are both
+/// `Optional<T>`, which the conversion layer treats identically). Other type spellings pass through
+/// unchanged.
 internal func expressionType(_ type: String) -> String {
   guard type.hasSuffix("!") else {
     return type
@@ -292,7 +293,7 @@ internal func collectProperties(
 /// a computed property is settable only when it declares an explicit `set` accessor. A getter-only
 /// computed property (`{ get }` or a single getter body) stays read-only. `willSet`/`didSet`
 /// observers imply stored storage, which is also settable.
-private func bindingIsSettable(_ binding: PatternBindingSyntax) -> Bool {
+internal func bindingIsSettable(_ binding: PatternBindingSyntax) -> Bool {
   guard let accessorBlock = binding.accessorBlock else {
     return true
   }
@@ -308,24 +309,5 @@ private func bindingIsSettable(_ binding: PatternBindingSyntax) -> Bool {
     }
   case .getter:
     return false
-  }
-}
-
-/// The throwing `JavaScriptUnownedValue` accessor that decodes the given primitive type directly
-/// (`asDouble()` for `Double`, etc.), bypassing the dynamic-type converter. Returns `nil` for types
-/// without a dedicated accessor (arrays, records, optionals, shared objects, other numeric widths),
-/// which decode through `getDynamicType().cast(...)`.
-func fastDecodeAccessor(for type: String) -> String? {
-  switch type {
-  case "Bool":
-    return "asBool"
-  case "Int":
-    return "asInt"
-  case "Double":
-    return "asDouble"
-  case "String":
-    return "asString"
-  default:
-    return nil
   }
 }
