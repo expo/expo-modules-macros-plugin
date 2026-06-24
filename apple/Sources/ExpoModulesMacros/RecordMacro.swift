@@ -29,10 +29,13 @@ import SwiftSyntaxMacros
  an optional type makes it nullable and optional, and a non-optional property without a
  default is required (the factories throw when the source omits it).
 
- Conversions go through the **public** dynamic-type API — `T.getDynamicType()` plus
- `cast(jsValue:appContext:)` / `cast(_:appContext:)` / `convertToJS(_:appContext:)` —
- so the synthesized code compiles inside user modules without any internal core symbols.
- Every property type must therefore conform to `AnyArgument`.
+ The JS-value paths convert through `JavaScriptDecodable.decode` / `JavaScriptEncodable.encode`
+ (`from(object:)` / `toObject(appContext:)`); the native-`Any` dictionary paths still go through the
+ public dynamic-type API — `T.getDynamicType()` plus `cast(_:appContext:)` / `convertToJS(_:appContext:)`
+ (`from(dictionary:)` / `toDictionary(appContext:)`), since `JavaScriptCodable` only converts JS
+ values, not native `Any`. Both spell types as `public` symbols so the synthesized code compiles inside
+ user modules without any internal core symbols. Every property type must therefore conform to both
+ `AnyArgument` and `JavaScriptDecodable & JavaScriptEncodable`.
 
  For classes that inherit from another `@Record`-annotated class, the synthesized
  methods chain to `super` so inherited properties are handled first.
@@ -60,14 +63,15 @@ public struct RecordMacro: MemberMacro, ExtensionMacro {
 
     var members: [DeclSyntax] = []
 
-    // A single never-called member that makes the compiler verify each property type is
-    // JS-convertible (the conversions below go through its dynamic-type API). Each property keeps its
-    // own named assertion inside, so the compiler's conformance diagnostic names the offending
-    // property (see `typeConformanceAssertions`). Emitted first so that, for a non-conforming type,
-    // this clear "requires that '…' conform to '…'" error is reported ahead of the noisier
-    // "no member 'getDynamicType'" errors from the conversion code below.
+    // A single never-called member that makes the compiler verify each property type is convertible
+    // both ways (the JS-value paths call `decode`/`encode`; the native-`Any` dictionary paths call
+    // the dynamic-type API). Each property keeps its own named assertion inside, so the compiler's
+    // conformance diagnostic names the offending property (see `typeConformanceAssertions`). Emitted
+    // first so that, for a non-conforming type, this clear "requires that '…' conform to '…'" error
+    // is reported ahead of the noisier "no member 'decode'"/"getDynamicType" errors from the
+    // conversion code below.
     let assertions = properties.map { ConformanceAssertion(name: $0.name, types: [$0.type]) }
-    if let assertionMember = typeConformanceAssertions(for: assertions) {
+    if let assertionMember = typeConformanceAssertions(for: assertions, constraint: recordFieldProtocolName) {
       members.append(assertionMember)
     }
 
@@ -131,8 +135,9 @@ public struct RecordMacro: MemberMacro, ExtensionMacro {
  */
 private struct RecordProperty {
   let name: String
-  /// The property's declared type, verbatim (e.g. `String`, `Int`, `String?`). Used to build
-  /// the memberwise-init parameter and to look up the dynamic type via `T.getDynamicType()`.
+  /// The property's declared type, verbatim (e.g. `String`, `Int`, `String?`). Used to build the
+  /// memberwise-init parameter and as the receiver of the per-property `decode`/`encode` (and, on the
+  /// dictionary paths, `getDynamicType()`) conversions.
   let type: String
   /// The default-value expression verbatim (`0`, `""`, `[]`), or `nil` when the property has none.
   /// Inlined into the memberwise init and the factories' omitted-property branch so the synthesized
@@ -155,7 +160,7 @@ private struct RecordProperty {
 /**
  Discovers the record's properties: every stored `var`/`let` binding that is not `static`,
  `private`, `fileprivate`, `lazy`, or computed. Each property must declare an explicit type
- annotation, since the synthesized conversions reference `Type.getDynamicType()`.
+ annotation, since the synthesized conversions name the type (e.g. `Type.decode(…)`).
  */
 private func recordProperties(
   of declaration: some DeclGroupSyntax
@@ -271,11 +276,20 @@ private func memberwiseInit(properties: [RecordProperty]) -> DeclSyntax {
 /**
  `from(object:appContext:)` — reads each property off the `JavaScriptObject` into a local,
  then constructs the record through the memberwise init. Required properties throw when
- undefined; defaulted properties fall back to the property's declared default (read from a
- throwaway `Self()`) when undefined; optional properties become `nil` when undefined/null.
+ undefined; defaulted properties fall back to the property's declared default (inlined) when
+ undefined; optional properties become `nil` when undefined/null. Each property is decoded with
+ `JavaScriptDecodable.decode`, so the factory binds the `runtime` from the app context once and
+ threads it to every read.
  */
 private func fromJSObjectFactory(properties: [RecordProperty]) -> DeclSyntax {
-  let body = factoryBody(properties: properties, readLines: jsObjectReadLines(properties: properties))
+  var lines: [String] = []
+  // Only bind the runtime when there's a property to decode — an empty record's factory would
+  // otherwise leave it unused.
+  if !properties.isEmpty {
+    lines.append("  let runtime = try appContext.runtime")
+  }
+  lines.append(factoryBody(properties: properties, readLines: jsObjectReadLines(properties: properties)))
+  let body = lines.joined(separator: "\n")
   return """
     @JavaScriptActor
     public static func from(object: borrowing JavaScriptObject, appContext: AppContext) throws -> Self {
@@ -311,23 +325,25 @@ private func factoryBody(properties: [RecordProperty], readLines: [String]) -> S
   return lines.joined(separator: "\n")
 }
 
-/// Per-property read statements for the JS-object factory, each producing a `let <name>`.
+/// Per-property read statements for the JS-object factory, each producing a `let <name>` by decoding
+/// the JS value with `JavaScriptDecodable.decode` (recovering the app context from `runtime` itself).
 private func jsObjectReadLines(properties: [RecordProperty]) -> [String] {
   var lines: [String] = []
   for property in properties {
     let valueVar = "\(property.name)JSValue"
     let exprType = expressionType(property.type)
-    let cast = "try \(exprType).getDynamicType().cast(jsValue: \(valueVar), appContext: appContext) as! \(exprType)"
+    let decode = "try \(exprType).decode(\(valueVar), in: runtime)"
     lines.append("  let \(valueVar) = object.getProperty(\"\(property.name)\")")
     if property.isRequired {
       lines.append("  guard !\(valueVar).isUndefined() else {")
       lines.append("    throw RecordPropertyRequiredException(\"\(property.name)\")")
       lines.append("  }")
-      lines.append("  let \(property.name) = \(cast)")
+      lines.append("  let \(property.name) = \(decode)")
     } else if property.isOptional {
-      lines.append("  let \(property.name): \(property.type) = (\(valueVar).isUndefined() || \(valueVar).isNull()) ? nil : \(cast)")
+      // `Optional.decode` already maps `undefined`/`null` to `nil`, so the read is a plain decode.
+      lines.append("  let \(property.name) = \(decode)")
     } else {
-      lines.append("  let \(property.name) = \(valueVar).isUndefined() ? \(property.defaultValue!) : \(cast)")
+      lines.append("  let \(property.name) = \(valueVar).isUndefined() ? \(property.defaultValue!) : \(decode)")
     }
   }
   return lines
@@ -388,20 +404,27 @@ private func toDictionaryMethod(properties: [RecordProperty], inheritsRecord: Bo
 }
 
 /**
- `toObject(appContext:)` — builds a `JavaScriptObject` directly, converting each property via
- `convertToJS`. The fast write path mirroring `from(object:)`. Subclasses chain to `super` so
- inherited properties are written first.
+ `toObject(appContext:)` — builds a `JavaScriptObject` directly, encoding each property with
+ `JavaScriptEncodable.encode`. The fast write path mirroring `from(object:)`. The `runtime` is bound
+ from the app context once and threaded to every write. Subclasses chain to `super` so inherited
+ properties are written first.
  */
 private func toObjectMethod(properties: [RecordProperty], inheritsRecord: Bool) -> DeclSyntax {
   let overrideKeyword = inheritsRecord ? "override " : ""
   var lines: [String] = []
+  // The base case needs the runtime to create the object; the inheriting case only needs it when
+  // there's a property to encode (it chains to `super` for the object itself). Binding it when unused
+  // would warn.
+  if !inheritsRecord || !properties.isEmpty {
+    lines.append("  let runtime = try appContext.runtime")
+  }
   if inheritsRecord {
     lines.append("  let object = try super.toObject(appContext: appContext)")
   } else {
-    lines.append("  let object = try appContext.runtime.createObject()")
+    lines.append("  let object = runtime.createObject()")
   }
   for property in properties {
-    lines.append("  object.setProperty(\"\(property.name)\", value: try \(expressionType(property.type)).getDynamicType().convertToJS(self.\(property.name), appContext: appContext))")
+    lines.append("  object.setProperty(\"\(property.name)\", value: try \(expressionType(property.type)).encode(self.\(property.name), in: runtime))")
   }
   lines.append("  return object")
   let body = lines.joined(separator: "\n")

@@ -14,6 +14,13 @@ internal let jsConvertibleProtocolName = "AnyArgument"
 internal let javaScriptDecodableProtocolName = "JavaScriptDecodable"
 internal let javaScriptEncodableProtocolName = "JavaScriptEncodable"
 
+/// The constraint a `@Record` property type must satisfy: it must be both `AnyArgument` (the
+/// `from(dictionary:)` / `toDictionary(appContext:)` paths still convert native `Any` through the
+/// dynamic-type API) and `JavaScriptDecodable & JavaScriptEncodable` (the `from(object:)` /
+/// `toObject(appContext:)` paths convert JS values through `decode`/`encode`). A record field has to
+/// support both directions, so the assertion requires the intersection.
+internal let recordFieldProtocolName = "AnyArgument & JavaScriptDecodable & JavaScriptEncodable"
+
 /// The protocol a type must conform to for `self.emit(event:…)` to resolve; core conforms
 /// `BaseModule` and `SharedObject` to it. Asserted by `@Event` so attaching it to a type that can't
 /// emit fails with a conformance diagnostic instead of an opaque "no member 'emit'" error.
@@ -94,8 +101,11 @@ internal func directionalConformanceAssertion(
 ///
 /// Returns `nil` when no assertion has anything left to verify (all primitives / empty), so the
 /// caller emits nothing.
-internal func typeConformanceAssertions(for assertions: [ConformanceAssertion]) -> DeclSyntax? {
-  let bodies = assertions.compactMap(conformanceAssertionBody)
+internal func typeConformanceAssertions(
+  for assertions: [ConformanceAssertion],
+  constraint: String = jsConvertibleProtocolName
+) -> DeclSyntax? {
+  let bodies = assertions.compactMap { conformanceAssertionBody($0, constraint: constraint) }
   guard !bodies.isEmpty else {
     return nil
   }
@@ -120,13 +130,16 @@ internal func assertableBoundaryType(_ type: String) -> String? {
 /// symbol, nothing to collide, nothing left in the type's namespace — and naming it after the member
 /// puts the member's name in the compiler's conformance diagnostic. Returns `nil` when every type was
 /// a known-conforming primitive or the list was empty.
-private func conformanceAssertionBody(_ assertion: ConformanceAssertion) -> String? {
+private func conformanceAssertionBody(
+  _ assertion: ConformanceAssertion,
+  constraint: String = jsConvertibleProtocolName
+) -> String? {
   let distinct = distinctAssertableTypes(assertion.types)
   guard !distinct.isEmpty else {
     return nil
   }
 
-  var lines = ["func \(assertion.name)<T: \(jsConvertibleProtocolName)>(_: T.Type) {}"]
+  var lines = ["func \(assertion.name)<T: \(constraint)>(_: T.Type) {}"]
   lines.append(contentsOf: distinct.map { "\(assertion.name)(\($0).self)" })
   return lines.joined(separator: "\n")
 }
