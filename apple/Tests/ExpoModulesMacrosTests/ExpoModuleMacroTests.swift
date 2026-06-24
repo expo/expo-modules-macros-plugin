@@ -184,12 +184,13 @@ struct ExpoModuleMacroTests {
                 throw Exceptions.ArgumentsRangeMismatch((functionName: "resize", received: arguments.count, required: 1, maximum: 2))
               }
               let arg0 = try Int.decode(arguments.unownedValue(at: 0), in: runtime)
-              let result = switch arguments.count {
+              let result: Bool
+              switch arguments.count {
               case 1:
-                self.resize(width: arg0)
+                result = self.resize(width: arg0)
               default:
                 let arg1 = try Int.decode(arguments.unownedValue(at: 1), in: runtime)
-                self.resize(width: arg0, height: arg1)
+                result = self.resize(width: arg0, height: arg1)
               }
               return try Bool.encode(result, in: runtime)
             }
@@ -269,12 +270,13 @@ struct ExpoModuleMacroTests {
               guard arguments.count >= 0 && arguments.count <= 1 else {
                 throw Exceptions.ArgumentsRangeMismatch((functionName: "ping", received: arguments.count, required: 0, maximum: 1))
               }
-              let result = switch arguments.count {
+              let result: Int
+              switch arguments.count {
               case 0:
-                self.ping()
+                result = self.ping()
               default:
                 let arg0 = try Int.decode(arguments.unownedValue(at: 0), in: runtime)
-                self.ping(times: arg0)
+                result = self.ping(times: arg0)
               }
               return try Int.encode(result, in: runtime)
             }

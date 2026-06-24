@@ -378,12 +378,13 @@ struct SharedObjectMacroTests {
                 throw Exceptions.ArgumentsRangeMismatch((functionName: "resize", received: arguments.count, required: 1, maximum: 2))
               }
               let arg0 = try Int.decode(arguments.unownedValue(at: 0), in: runtime)
-              let result = switch arguments.count {
+              let result: Bool
+              switch arguments.count {
               case 1:
-                _self.resize(width: arg0)
+                result = _self.resize(width: arg0)
               default:
                 let arg1 = try Int.decode(arguments.unownedValue(at: 1), in: runtime)
-                _self.resize(width: arg0, height: arg1)
+                result = _self.resize(width: arg0, height: arg1)
               }
               return try Bool.encode(result, in: runtime)
             }
@@ -600,12 +601,13 @@ struct SharedObjectMacroTests {
               guard arguments.count >= 0 && arguments.count <= 1 else {
                 throw Exceptions.ArgumentsRangeMismatch((functionName: "resolve", received: arguments.count, required: 0, maximum: 1))
               }
-              let result = switch arguments.count {
+              let result: MyRecord?
+              switch arguments.count {
               case 0:
-                _self.resolve(nil)
+                result = _self.resolve(nil)
               default:
                 let arg0 = try MyRecord?.decode(arguments.unownedValue(at: 0), in: runtime)
-                _self.resolve(arg0)
+                result = _self.resolve(arg0)
               }
               return try MyRecord?.encode(result, in: runtime)
             }
