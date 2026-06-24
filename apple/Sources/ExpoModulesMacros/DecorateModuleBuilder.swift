@@ -50,12 +50,11 @@ internal struct JSFunction {
   /// The decode-call-encode statements that form the host-function body, indented with the given
   /// prefix. Receiver unwrap (shared objects only), then an arity guard (an exact check when every
   /// parameter is required, otherwise a range check) throwing `Exceptions.ArgumentsRangeMismatch`;
-  /// then the decode of the always-present required prefix (primitives via a direct typed accessor
-  /// like `asDouble()` on a zero-copy `arguments.unownedValue(at:)`, others via
-  /// `getDynamicType().cast(...)`); then the call and result encode (primitives via
-  /// `toJavaScriptValue(in:)`, others via `castToJS(...)`). When a trailing run of parameters is
-  /// omittable the call branches on `arguments.count`, decoding only the slots that branch actually
-  /// has — `arguments[i]` traps past `count`, so a slot the caller didn't pass is never indexed.
+  /// then the decode of the always-present required prefix via `JavaScriptDecodable.decode` on a
+  /// zero-copy `arguments.unownedValue(at:)`; then the call and result encode via
+  /// `JavaScriptEncodable.encode`. When a trailing run of parameters is omittable the call branches
+  /// on `arguments.count`, decoding only the slots that branch actually has — `unownedValue(at:)` is
+  /// unchecked, so a slot the caller didn't pass is never indexed.
   private func bodyStatements(receiver: Receiver, indent: String) -> String {
     let required = requiredArgumentCount
     let maximum = parameters.count
@@ -119,18 +118,14 @@ internal struct JSFunction {
       .joined(separator: "\n")
   }
 
-  /// `let arg<index> = …` decoding the slot at `index` by its static type: a primitive through a
-  /// direct typed accessor on a borrowed `JavaScriptUnownedValue` (no owning value, no `jsi::Value`
-  /// copy, no `getDynamicType()` allocation, no `Any` boxing, no force-cast — still validating and
-  /// throwing `TypeError` on a mismatch), any other type through the dynamic converter (which needs
-  /// an owning value, so it indexes the buffer directly).
+  /// `let arg<index> = …` decoding the slot at `index` by its static type through
+  /// `JavaScriptDecodable.decode` on the borrowed `JavaScriptUnownedValue` — no owning value, no
+  /// `jsi::Value` copy, no `Any` boxing, no force-cast; it returns the concrete type directly. A
+  /// primitive's `decode` is `@inlinable` and lowers to the same direct accessor a hand-rolled fast
+  /// path would use.
   private func decodeStatement(at index: Int) -> String {
-    let type = parameters[index].type.trimmedDescription
-    if let accessor = fastDecodeAccessor(for: type) {
-      return "let arg\(index) = try arguments.unownedValue(at: \(index)).\(accessor)()"
-    }
-    let exprType = expressionType(type)
-    return "let arg\(index) = try \(exprType).getDynamicType().cast(jsValue: arguments[\(index)], appContext: appContext) as! \(exprType)"
+    let exprType = expressionType(parameters[index].type.trimmedDescription)
+    return "let arg\(index) = try \(exprType).decode(arguments.unownedValue(at: \(index)), in: runtime)"
   }
 
   /// The `<callee>.<name>(...)` call for the given arity. Slots `0..<arity` are passed their decoded
@@ -178,17 +173,17 @@ internal struct JSFunction {
     return lines
   }
 
-  /// Encode the `result` local back to JS and return it: a primitive through `toJavaScriptValue(in:)`
-  /// (the typed `JavaScriptRepresentable` conversion — no `Any`, no dynamic-type allocation), any
-  /// other type through the dynamic converter. A no-return function returns `.undefined` instead.
+  /// Encode the `result` local back to JS and return it through `JavaScriptEncodable.encode`, the same
+  /// for every type. Unlike the decode side there's no primitive fast path: `encode` produces the same
+  /// value as the primitive's `toJavaScriptValue(in:)` except for `Int`/`UInt`, where it range-checks
+  /// and throws instead of silently encoding an out-of-safe-range value as a lossy number — the
+  /// catchable error is the right behavior, and matches how non-primitive integers already encode. A
+  /// no-return function returns `.undefined` instead.
   private func encodeResultLines() -> [String] {
     guard let returnType else {
       return ["return .undefined"]
     }
-    if fastDecodeAccessor(for: returnType) != nil {
-      return ["return result.toJavaScriptValue(in: runtime)"]
-    }
-    return ["return try \(expressionType(returnType)).getDynamicType().castToJS(result, appContext: appContext, in: runtime)"]
+    return ["return try \(expressionType(returnType)).encode(result, in: runtime)"]
   }
 
   /// The `setProperty` statement that installs this function on the JS object. The decode-call-encode
@@ -201,10 +196,6 @@ internal struct JSFunction {
   /// the host-function closure is what keeps the native callable alive for as long as JS can invoke
   /// it; its lifetime is bounded by the JS VM's garbage collection of the object. A shared object
   /// captures nothing of the instance: it recovers the typed receiver from the JS `this` per call.
-  /// `appContext` is captured **weak** (and guarded) so it doesn't form a real retain cycle through
-  /// the app context. When no argument or return value goes through the dynamic-type converter the
-  /// body never references `appContext`, so the capture and guard are omitted to avoid the
-  /// unused-capture warning.
   func decorateStatements(receiver: Receiver) -> String {
     // Synchronous `@JS` bindings bind through the unowned-`this` `setProperty` overload, which hands
     // `this` in as a borrowed `JavaScriptUnownedValue` instead of allocating an owning
@@ -215,41 +206,18 @@ internal struct JSFunction {
     // on a shorthand `{ [capture] name, name in }` parameter. Async functions keep the untyped
     // shorthand and the owning-`this` overload: there is no unowned-`this` async variant and the buffer
     // escapes into the task anyway.
-    let captures = receiver.captureClause(usesAppContext: usesAppContext)
+    let captures = receiver.captureClause
     let parameters =
       isAsync
       ? "this, arguments"
       : "(this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer)"
 
     let object = receiver.decoratedObject
-    if usesAppContext {
-      return """
-          \(object).setProperty("\(jsName)") { \(captures)\(parameters) in
-            guard let appContext else {
-              throw Exceptions.AppContextLost()
-            }
-        \(bodyStatements(receiver: receiver, indent: "    "))
-          }
-        """
-    }
     return """
         \(object).setProperty("\(jsName)") { \(captures)\(parameters) in
       \(bodyStatements(receiver: receiver, indent: "    "))
         }
       """
-  }
-
-  /// True when the host-function body references `appContext` — i.e. some parameter or the return
-  /// type lacks a fast accessor and decodes/encodes through `getDynamicType()`, which threads
-  /// `appContext` in.
-  private var usesAppContext: Bool {
-    if parameters.contains(where: { fastDecodeAccessor(for: $0.type.trimmedDescription) == nil }) {
-      return true
-    }
-    if let returnType, fastDecodeAccessor(for: returnType) == nil {
-      return true
-    }
-    return false
   }
 }
 
@@ -263,9 +231,8 @@ internal struct JSFunction {
 ///
 /// The receiver (see `Receiver`) is the module's `self` for a module binding, or the per-call `_self`
 /// unwrapped from the JS `this` for a shared object. The getter reads `<callee>.<name>` and the setter
-/// writes `<callee>.<name> = …`. Decode/encode of the value reuse the same static-type fast path as
-/// functions (primitives through a direct typed accessor / `toJavaScriptValue`, other types through
-/// the `getDynamicType()` converter).
+/// writes `<callee>.<name> = …`. Decode/encode of the value go through `JavaScriptDecodable.decode` /
+/// `JavaScriptEncodable.encode`, the same uniform path as functions.
 internal struct JSProperty {
   let swiftName: String
   let jsName: String
@@ -282,18 +249,11 @@ internal struct JSProperty {
   /// the closure-taking `setProperty(_:)` overload — with the read/write body inlined into each
   /// closure — and installs it with `object.defineProperty(name, descriptor:)`. Capture matches the
   /// function bindings: a module captures `self` strong, a shared object captures nothing of the
-  /// instance; `appContext` is weak + guarded — and, like functions, the `appContext` capture + guard
-  /// are omitted from an accessor whose body never references it (a primitive value, decoded/encoded
-  /// without the dynamic converter), to avoid the unused-capture warning. Getter and setter are gated
-  /// independently.
+  /// instance. Getter and setter are gated independently.
   func decorateStatements(receiver: Receiver) -> String {
     let descriptorName = "\(swiftName)Descriptor"
     let callee = receiver.callee
     let object = receiver.decoratedObject
-    // A primitive value type encodes/decodes without `getDynamicType()`, so its accessor body never
-    // references `appContext`. `nil` (untyped) goes through the dynamic-less `toJavaScriptValue`
-    // getter, which also doesn't use it.
-    let usesAppContext = valueType.map { fastDecodeAccessor(for: $0) == nil } ?? false
     // A shared object's accessors unwrap the JS `this` into `_self` before reading/writing; a module
     // reads `self` directly. The unwrap leads each accessor body.
     let unwrap = receiver.unwrapStatement.map { "\($0)\n" } ?? ""
@@ -302,39 +262,28 @@ internal struct JSProperty {
     lines.append("let \(descriptorName) = runtime.createObject()")
     lines.append("\(descriptorName).setProperty(\"enumerable\", value: true)")
 
-    // Getter: read `<callee>.<name>` and encode the result back to JS.
+    // Getter: read `<callee>.<name>` and encode the result back to JS through `encode`. When the value
+    // type couldn't be inferred (no annotation and no literal default, rare for a stored var) there's
+    // no static type to call `encode` on, so the value's own `toJavaScriptValue(in:)` is the fallback.
     let getEncode: String
-    if let valueType, fastDecodeAccessor(for: valueType) != nil {
-      getEncode = "return \(callee).\(swiftName).toJavaScriptValue(in: runtime)"
-    } else if let valueType {
-      getEncode =
-        "return try \(expressionType(valueType)).getDynamicType().castToJS(\(callee).\(swiftName), appContext: appContext, in: runtime)"
+    if let valueType {
+      getEncode = "return try \(expressionType(valueType)).encode(\(callee).\(swiftName), in: runtime)"
     } else {
-      // No known type: fall back to converting whatever `<callee>.<name>` is. This only happens when
-      // the declaration has neither an annotation nor a literal default, which is rare for a stored
-      // var.
       getEncode = "return \(callee).\(swiftName).toJavaScriptValue(in: runtime)"
     }
     lines.append(
-      accessorClosure(
-        descriptorName, "get", receiver: receiver, usesAppContext: usesAppContext, body: "\(unwrap)\(getEncode)"))
+      accessorClosure(descriptorName, "get", receiver: receiver, body: "\(unwrap)\(getEncode)"))
 
-    // Setter: decode argument 0 by the static type and write `<callee>.<name>`. A typed setter needs
-    // a known value type; when the type couldn't be inferred the property is bound getter-only (a
-    // settable var with neither an annotation nor a literal default is rare and can't be decoded).
+    // Setter: decode argument 0 by the static type through `decode` and write `<callee>.<name>`. A
+    // typed setter needs a known value type; when the type couldn't be inferred the property is bound
+    // getter-only (a settable var with neither an annotation nor a literal default is rare and can't
+    // be decoded).
     if isSettable, let valueType {
-      let setDecode: String
-      if let accessor = fastDecodeAccessor(for: valueType) {
-        setDecode = "\(callee).\(swiftName) = try arguments.unownedValue(at: 0).\(accessor)()"
-      } else {
-        let exprType = expressionType(valueType)
-        setDecode =
-          "\(callee).\(swiftName) = try \(exprType).getDynamicType().cast(jsValue: arguments[0], appContext: appContext) as! \(exprType)"
-      }
+      let exprType = expressionType(valueType)
+      let setDecode = "\(callee).\(swiftName) = try \(exprType).decode(arguments.unownedValue(at: 0), in: runtime)"
       lines.append(
         accessorClosure(
-          descriptorName, "set", receiver: receiver, usesAppContext: usesAppContext,
-          body: "\(unwrap)\(setDecode)\nreturn .undefined"))
+          descriptorName, "set", receiver: receiver, body: "\(unwrap)\(setDecode)\nreturn .undefined"))
     }
 
     lines.append("\(object).defineProperty(\"\(jsName)\", descriptor: \(descriptorName))")
@@ -346,15 +295,13 @@ internal struct JSProperty {
   }
 
   /// One `descriptor.setProperty("get"/"set") { … }` accessor entry. The capture list follows the
-  /// receiver (a module captures `self` strong; a shared object captures nothing of the instance) and,
-  /// when `usesAppContext`, adds `appContext` weak + guarded (matching the function bindings);
-  /// otherwise the guard is omitted so a primitive accessor doesn't warn on an unused capture.
+  /// receiver: a module captures `self` strong; a shared object captures nothing of the instance.
   private func accessorClosure(
-    _ descriptorName: String, _ key: String, receiver: Receiver, usesAppContext: Bool, body: String
+    _ descriptorName: String, _ key: String, receiver: Receiver, body: String
   ) -> String {
-    let captures = receiver.captureClause(usesAppContext: usesAppContext)
-    // Indent each line of a (possibly multi-line) body to sit one level inside the closure, aligned
-    // with the `guard`; a bare `\(body)` interpolation would only indent the first line.
+    let captures = receiver.captureClause
+    // Indent each line of a (possibly multi-line) body to sit one level inside the closure; a bare
+    // `\(body)` interpolation would only indent the first line.
     let indentedBody = body
       .split(separator: "\n", omittingEmptySubsequences: false)
       .map { "  \($0)" }
@@ -365,16 +312,6 @@ internal struct JSProperty {
     // `borrowing JavaScriptUnownedValue` selects the unowned-`this` overload. A module ignores `this`;
     // a shared object unwraps it in the body.
     let parameters = "(this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer)"
-    if usesAppContext {
-      return """
-        \(descriptorName).setProperty("\(key)") { \(captures)\(parameters) in
-          guard let appContext else {
-            throw Exceptions.AppContextLost()
-          }
-        \(indentedBody)
-        }
-        """
-    }
     return """
       \(descriptorName).setProperty("\(key)") { \(captures)\(parameters) in
       \(indentedBody)

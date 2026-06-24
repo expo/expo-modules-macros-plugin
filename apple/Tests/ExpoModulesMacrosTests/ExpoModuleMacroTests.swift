@@ -108,9 +108,9 @@ struct ExpoModuleMacroTests {
               guard arguments.count == 1 else {
                 throw Exceptions.ArgumentsRangeMismatch((functionName: "greet", received: arguments.count, required: 1, maximum: 1))
               }
-              let arg0 = try arguments.unownedValue(at: 0).asString()
+              let arg0 = try String.decode(arguments.unownedValue(at: 0), in: runtime)
               let result = self.greet(name: arg0)
-              return result.toJavaScriptValue(in: runtime)
+              return try String.encode(result, in: runtime)
             }
           }
         }
@@ -145,10 +145,10 @@ struct ExpoModuleMacroTests {
               guard arguments.count == 2 else {
                 throw Exceptions.ArgumentsRangeMismatch((functionName: "add", received: arguments.count, required: 2, maximum: 2))
               }
-              let arg0 = try arguments.unownedValue(at: 0).asDouble()
-              let arg1 = try arguments.unownedValue(at: 1).asDouble()
+              let arg0 = try Double.decode(arguments.unownedValue(at: 0), in: runtime)
+              let arg1 = try Double.decode(arguments.unownedValue(at: 1), in: runtime)
               let result = self.add(arg0, to: arg1)
-              return result.toJavaScriptValue(in: runtime)
+              return try Double.encode(result, in: runtime)
             }
           }
         }
@@ -183,15 +183,15 @@ struct ExpoModuleMacroTests {
               guard arguments.count >= 1 && arguments.count <= 2 else {
                 throw Exceptions.ArgumentsRangeMismatch((functionName: "resize", received: arguments.count, required: 1, maximum: 2))
               }
-              let arg0 = try arguments.unownedValue(at: 0).asInt()
+              let arg0 = try Int.decode(arguments.unownedValue(at: 0), in: runtime)
               let result = switch arguments.count {
               case 1:
                 self.resize(width: arg0)
               default:
-                let arg1 = try arguments.unownedValue(at: 1).asInt()
+                let arg1 = try Int.decode(arguments.unownedValue(at: 1), in: runtime)
                 self.resize(width: arg0, height: arg1)
               }
-              return result.toJavaScriptValue(in: runtime)
+              return try Bool.encode(result, in: runtime)
             }
           }
         }
@@ -222,19 +222,16 @@ struct ExpoModuleMacroTests {
 
           @JavaScriptActor
           public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
-            object.setProperty("tag") { [weak appContext, self] (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
-              guard let appContext else {
-                throw Exceptions.AppContextLost()
-              }
+            object.setProperty("tag") { [self] (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
               guard arguments.count >= 1 && arguments.count <= 2 else {
                 throw Exceptions.ArgumentsRangeMismatch((functionName: "tag", received: arguments.count, required: 1, maximum: 2))
               }
-              let arg0 = try arguments.unownedValue(at: 0).asString()
+              let arg0 = try String.decode(arguments.unownedValue(at: 0), in: runtime)
               switch arguments.count {
               case 1:
                 self.tag(name: arg0, note: nil)
               default:
-                let arg1 = try String?.getDynamicType().cast(jsValue: arguments[1], appContext: appContext) as! String?
+                let arg1 = try String?.decode(arguments.unownedValue(at: 1), in: runtime)
                 self.tag(name: arg0, note: arg1)
               }
               return .undefined
@@ -276,10 +273,10 @@ struct ExpoModuleMacroTests {
               case 0:
                 self.ping()
               default:
-                let arg0 = try arguments.unownedValue(at: 0).asInt()
+                let arg0 = try Int.decode(arguments.unownedValue(at: 0), in: runtime)
                 self.ping(times: arg0)
               }
-              return result.toJavaScriptValue(in: runtime)
+              return try Int.encode(result, in: runtime)
             }
           }
         }
@@ -303,10 +300,9 @@ struct ExpoModuleMacroTests {
           func transform(value: MyRecord, count: Int) -> [MyRecord] { [] }
 
           private func _assertTypesConformance_transform() {
-            func transform<T: AnyArgument>(_: T.Type) {
+            func transform<A0: JavaScriptDecodable, Return: JavaScriptEncodable>(_: A0.Type, _: Return.Type) {
             }
-            transform(MyRecord.self)
-            transform([MyRecord].self)
+            transform(MyRecord.self, [MyRecord].self)
           }
 
           public static let _jsName = "MyModule"
@@ -317,18 +313,100 @@ struct ExpoModuleMacroTests {
 
           @JavaScriptActor
           public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
-            object.setProperty("transform") { [weak appContext, self] (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
-              guard let appContext else {
-                throw Exceptions.AppContextLost()
-              }
+            object.setProperty("transform") { [self] (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
               guard arguments.count == 2 else {
                 throw Exceptions.ArgumentsRangeMismatch((functionName: "transform", received: arguments.count, required: 2, maximum: 2))
               }
-              let arg0 = try MyRecord.getDynamicType().cast(jsValue: arguments[0], appContext: appContext) as! MyRecord
-              let arg1 = try arguments.unownedValue(at: 1).asInt()
+              let arg0 = try MyRecord.decode(arguments.unownedValue(at: 0), in: runtime)
+              let arg1 = try Int.decode(arguments.unownedValue(at: 1), in: runtime)
               let result = self.transform(value: arg0, count: arg1)
-              return try [MyRecord].getDynamicType().castToJS(result, appContext: appContext, in: runtime)
+              return try [MyRecord].encode(result, in: runtime)
             }
+          }
+        }
+        """
+    )
+  }
+
+  @Test
+  func `Multiple non-primitive arguments get indexed decodable slots in the assertion`() {
+    assertExpansion(
+      """
+      @ExpoModule
+      final class MyModule: Module {
+        @JS
+        func merge(primary: MyRecord, secondary: OtherRecord) -> MyRecord { primary }
+      }
+      """,
+      expandedSource: """
+        final class MyModule: Module {
+          @JavaScriptActor
+          func merge(primary: MyRecord, secondary: OtherRecord) -> MyRecord { primary }
+
+          private func _assertTypesConformance_merge() {
+            func merge<A0: JavaScriptDecodable, A1: JavaScriptDecodable, Return: JavaScriptEncodable>(_: A0.Type, _: A1.Type, _: Return.Type) {
+            }
+            merge(MyRecord.self, OtherRecord.self, MyRecord.self)
+          }
+
+          public static let _jsName = "MyModule"
+
+          public func _synthesizedDefinition() -> [AnyDefinition] {
+            return []
+          }
+
+          @JavaScriptActor
+          public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
+            object.setProperty("merge") { [self] (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
+              guard arguments.count == 2 else {
+                throw Exceptions.ArgumentsRangeMismatch((functionName: "merge", received: arguments.count, required: 2, maximum: 2))
+              }
+              let arg0 = try MyRecord.decode(arguments.unownedValue(at: 0), in: runtime)
+              let arg1 = try OtherRecord.decode(arguments.unownedValue(at: 1), in: runtime)
+              let result = self.merge(primary: arg0, secondary: arg1)
+              return try MyRecord.encode(result, in: runtime)
+            }
+          }
+        }
+        """
+    )
+  }
+
+  @Test
+  func `Getter-only non-primitive property asserts only the encodable direction`() {
+    assertExpansion(
+      """
+      @ExpoModule
+      final class MyModule: Module {
+        @JS
+        var cache: MyRecord { MyRecord() }
+      }
+      """,
+      expandedSource: """
+        final class MyModule: Module {
+          @JavaScriptActor
+          var cache: MyRecord { MyRecord() }
+
+          private func _assertTypesConformance_cache() {
+            func cache<Return: JavaScriptEncodable>(_: Return.Type) {
+            }
+            cache(MyRecord.self)
+          }
+
+          public static let _jsName = "MyModule"
+
+          public func _synthesizedDefinition() -> [AnyDefinition] {
+            return []
+          }
+
+          @JavaScriptActor
+          public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
+            let cacheDescriptor = runtime.createObject()
+            cacheDescriptor.setProperty("enumerable", value: true)
+            cacheDescriptor.setProperty("get") { [self] (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
+              return try MyRecord.encode(self.cache, in: runtime)
+            }
+            object.defineProperty("cache", descriptor: cacheDescriptor)
           }
         }
         """
@@ -351,7 +429,7 @@ struct ExpoModuleMacroTests {
           func make(count: Int) -> MyRecord! { nil }
 
           private func _assertTypesConformance_make() {
-            func make<T: AnyArgument>(_: T.Type) {
+            func make<Return: JavaScriptEncodable>(_: Return.Type) {
             }
             make(MyRecord.self)
           }
@@ -364,16 +442,13 @@ struct ExpoModuleMacroTests {
 
           @JavaScriptActor
           public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
-            object.setProperty("make") { [weak appContext, self] (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
-              guard let appContext else {
-                throw Exceptions.AppContextLost()
-              }
+            object.setProperty("make") { [self] (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
               guard arguments.count == 1 else {
                 throw Exceptions.ArgumentsRangeMismatch((functionName: "make", received: arguments.count, required: 1, maximum: 1))
               }
-              let arg0 = try arguments.unownedValue(at: 0).asInt()
+              let arg0 = try Int.decode(arguments.unownedValue(at: 0), in: runtime)
               let result = self.make(count: arg0)
-              return try MyRecord?.getDynamicType().castToJS(result, appContext: appContext, in: runtime)
+              return try MyRecord?.encode(result, in: runtime)
             }
           }
         }
@@ -397,7 +472,7 @@ struct ExpoModuleMacroTests {
           static func describe(_ value: MyRecord) -> String { "" }
 
           private static func _assertTypesConformance_describe() {
-            func describe<T: AnyArgument>(_: T.Type) {
+            func describe<A0: JavaScriptDecodable>(_: A0.Type) {
             }
             describe(MyRecord.self)
           }
@@ -410,16 +485,13 @@ struct ExpoModuleMacroTests {
 
           @JavaScriptActor
           public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
-            object.setProperty("describe") { [weak appContext, self] (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
-              guard let appContext else {
-                throw Exceptions.AppContextLost()
-              }
+            object.setProperty("describe") { [self] (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
               guard arguments.count == 1 else {
                 throw Exceptions.ArgumentsRangeMismatch((functionName: "describe", received: arguments.count, required: 1, maximum: 1))
               }
-              let arg0 = try MyRecord.getDynamicType().cast(jsValue: arguments[0], appContext: appContext) as! MyRecord
+              let arg0 = try MyRecord.decode(arguments.unownedValue(at: 0), in: runtime)
               let result = self.describe(arg0)
-              return result.toJavaScriptValue(in: runtime)
+              return try String.encode(result, in: runtime)
             }
           }
         }
@@ -524,9 +596,9 @@ struct ExpoModuleMacroTests {
               guard arguments.count == 1 else {
                 throw Exceptions.ArgumentsRangeMismatch((functionName: "fetchValue", received: arguments.count, required: 1, maximum: 1))
               }
-              let arg0 = try arguments.unownedValue(at: 0).asString()
+              let arg0 = try String.decode(arguments.unownedValue(at: 0), in: runtime)
               let result = try await self.fetchValue(key: arg0)
-              return result.toJavaScriptValue(in: runtime)
+              return try Int.encode(result, in: runtime)
             }
           }
         }
@@ -560,7 +632,7 @@ struct ExpoModuleMacroTests {
             let statusDescriptor = runtime.createObject()
             statusDescriptor.setProperty("enumerable", value: true)
             statusDescriptor.setProperty("get") { [self] (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
-              return self.status.toJavaScriptValue(in: runtime)
+              return try String.encode(self.status, in: runtime)
             }
             object.defineProperty("status", descriptor: statusDescriptor)
           }
@@ -595,10 +667,10 @@ struct ExpoModuleMacroTests {
             let readyDescriptor = runtime.createObject()
             readyDescriptor.setProperty("enumerable", value: true)
             readyDescriptor.setProperty("get") { [self] (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
-              return self.ready.toJavaScriptValue(in: runtime)
+              return try Bool.encode(self.ready, in: runtime)
             }
             readyDescriptor.setProperty("set") { [self] (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
-              self.ready = try arguments.unownedValue(at: 0).asBool()
+              self.ready = try Bool.decode(arguments.unownedValue(at: 0), in: runtime)
               return .undefined
             }
             object.defineProperty("ready", descriptor: readyDescriptor)
@@ -624,9 +696,9 @@ struct ExpoModuleMacroTests {
           var config: MyRecord
 
           private func _assertTypesConformance_config() {
-            func config<T: AnyArgument>(_: T.Type) {
+            func config<A0: JavaScriptDecodable, Return: JavaScriptEncodable>(_: A0.Type, _: Return.Type) {
             }
-            config(MyRecord.self)
+            config(MyRecord.self, MyRecord.self)
           }
 
           public static let _jsName = "MyModule"
@@ -639,17 +711,11 @@ struct ExpoModuleMacroTests {
           public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
             let configDescriptor = runtime.createObject()
             configDescriptor.setProperty("enumerable", value: true)
-            configDescriptor.setProperty("get") { [weak appContext, self] (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
-              guard let appContext else {
-                throw Exceptions.AppContextLost()
-              }
-              return try MyRecord.getDynamicType().castToJS(self.config, appContext: appContext, in: runtime)
+            configDescriptor.setProperty("get") { [self] (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
+              return try MyRecord.encode(self.config, in: runtime)
             }
-            configDescriptor.setProperty("set") { [weak appContext, self] (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
-              guard let appContext else {
-                throw Exceptions.AppContextLost()
-              }
-              self.config = try MyRecord.getDynamicType().cast(jsValue: arguments[0], appContext: appContext) as! MyRecord
+            configDescriptor.setProperty("set") { [self] (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
+              self.config = try MyRecord.decode(arguments.unownedValue(at: 0), in: runtime)
               return .undefined
             }
             object.defineProperty("config", descriptor: configDescriptor)
@@ -675,9 +741,9 @@ struct ExpoModuleMacroTests {
           var config: MyRecord!
 
           private func _assertTypesConformance_config() {
-            func config<T: AnyArgument>(_: T.Type) {
+            func config<A0: JavaScriptDecodable, Return: JavaScriptEncodable>(_: A0.Type, _: Return.Type) {
             }
-            config(MyRecord.self)
+            config(MyRecord.self, MyRecord.self)
           }
 
           public static let _jsName = "MyModule"
@@ -690,17 +756,11 @@ struct ExpoModuleMacroTests {
           public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
             let configDescriptor = runtime.createObject()
             configDescriptor.setProperty("enumerable", value: true)
-            configDescriptor.setProperty("get") { [weak appContext, self] (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
-              guard let appContext else {
-                throw Exceptions.AppContextLost()
-              }
-              return try MyRecord?.getDynamicType().castToJS(self.config, appContext: appContext, in: runtime)
+            configDescriptor.setProperty("get") { [self] (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
+              return try MyRecord?.encode(self.config, in: runtime)
             }
-            configDescriptor.setProperty("set") { [weak appContext, self] (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
-              guard let appContext else {
-                throw Exceptions.AppContextLost()
-              }
-              self.config = try MyRecord?.getDynamicType().cast(jsValue: arguments[0], appContext: appContext) as! MyRecord?
+            configDescriptor.setProperty("set") { [self] (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
+              self.config = try MyRecord?.decode(arguments.unownedValue(at: 0), in: runtime)
               return .undefined
             }
             object.defineProperty("config", descriptor: configDescriptor)
@@ -746,14 +806,14 @@ struct ExpoModuleMacroTests {
               guard arguments.count == 1 else {
                 throw Exceptions.ArgumentsRangeMismatch((functionName: "greet", received: arguments.count, required: 1, maximum: 1))
               }
-              let arg0 = try arguments.unownedValue(at: 0).asString()
+              let arg0 = try String.decode(arguments.unownedValue(at: 0), in: runtime)
               let result = self.greet(name: arg0)
-              return result.toJavaScriptValue(in: runtime)
+              return try String.encode(result, in: runtime)
             }
             let statusDescriptor = runtime.createObject()
             statusDescriptor.setProperty("enumerable", value: true)
             statusDescriptor.setProperty("get") { [self] (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
-              return self.status.toJavaScriptValue(in: runtime)
+              return try String.encode(self.status, in: runtime)
             }
             object.defineProperty("status", descriptor: statusDescriptor)
           }
@@ -789,7 +849,7 @@ struct ExpoModuleMacroTests {
                 throw Exceptions.ArgumentsRangeMismatch((functionName: "compute", received: arguments.count, required: 0, maximum: 0))
               }
               let result = self.compute()
-              return result.toJavaScriptValue(in: runtime)
+              return try Int.encode(result, in: runtime)
             }
           }
         }

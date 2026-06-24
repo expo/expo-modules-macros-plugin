@@ -45,14 +45,13 @@ internal enum Receiver {
   }
 
   /// The capture-clause fragment (with a trailing space, or empty when nothing is captured). A module
-  /// captures `self` strong; a shared object captures nothing of the instance. `appContext`, when used,
-  /// is captured weak in both cases.
-  func captureClause(usesAppContext: Bool) -> String {
+  /// captures `self` strong; a shared object captures nothing of the instance.
+  var captureClause: String {
     switch self {
     case .module:
-      return usesAppContext ? "[weak appContext, self] " : "[self] "
+      return "[self] "
     case .sharedObject:
-      return usesAppContext ? "[weak appContext] " : ""
+      return ""
     }
   }
 }
