@@ -66,15 +66,16 @@ struct RecordMacroTests {
 
           @JavaScriptActor
           public static func from(object: borrowing JavaScriptObject, appContext: AppContext) throws -> Self {
+            let runtime = try appContext.runtime
             let nameJSValue = object.getProperty("name")
             guard !nameJSValue.isUndefined() else {
               throw RecordPropertyRequiredException("name")
             }
-            let name = try String.getDynamicType().cast(jsValue: nameJSValue, appContext: appContext) as! String
+            let name = try String.decode(nameJSValue, in: runtime)
             let countJSValue = object.getProperty("count")
-            let count = countJSValue.isUndefined() ? 0 : try Int.getDynamicType().cast(jsValue: countJSValue, appContext: appContext) as! Int
+            let count = countJSValue.isUndefined() ? 0 : try Int.decode(countJSValue, in: runtime)
             let noteJSValue = object.getProperty("note")
-            let note: String? = (noteJSValue.isUndefined() || noteJSValue.isNull()) ? nil : try String?.getDynamicType().cast(jsValue: noteJSValue, appContext: appContext) as! String?
+            let note = try String?.decode(noteJSValue, in: runtime)
             return Self(name: name, count: count, note: note)
           }
 
@@ -101,10 +102,11 @@ struct RecordMacroTests {
 
           @JavaScriptActor
           public func toObject(appContext: AppContext) throws -> JavaScriptObject {
-            let object = try appContext.runtime.createObject()
-            object.setProperty("name", value: try String.getDynamicType().convertToJS(self.name, appContext: appContext))
-            object.setProperty("count", value: try Int.getDynamicType().convertToJS(self.count, appContext: appContext))
-            object.setProperty("note", value: try String?.getDynamicType().convertToJS(self.note, appContext: appContext))
+            let runtime = try appContext.runtime
+            let object = runtime.createObject()
+            object.setProperty("name", value: try String.encode(self.name, in: runtime))
+            object.setProperty("count", value: try Int.encode(self.count, in: runtime))
+            object.setProperty("note", value: try String?.encode(self.note, in: runtime))
             return object
           }
         }
@@ -129,7 +131,7 @@ struct RecordMacroTests {
           var owner: MyRecord!
 
           private func _assertTypesConformance() {
-            func owner<T: AnyArgument>(_: T.Type) {
+            func owner<T: AnyArgument & JavaScriptDecodable & JavaScriptEncodable>(_: T.Type) {
             }
             owner(MyRecord.self)
           }
@@ -143,8 +145,9 @@ struct RecordMacroTests {
 
           @JavaScriptActor
           public static func from(object: borrowing JavaScriptObject, appContext: AppContext) throws -> Self {
+            let runtime = try appContext.runtime
             let ownerJSValue = object.getProperty("owner")
-            let owner: MyRecord! = (ownerJSValue.isUndefined() || ownerJSValue.isNull()) ? nil : try MyRecord?.getDynamicType().cast(jsValue: ownerJSValue, appContext: appContext) as! MyRecord?
+            let owner = try MyRecord?.decode(ownerJSValue, in: runtime)
             return Self(owner: owner)
           }
 
@@ -162,8 +165,9 @@ struct RecordMacroTests {
 
           @JavaScriptActor
           public func toObject(appContext: AppContext) throws -> JavaScriptObject {
-            let object = try appContext.runtime.createObject()
-            object.setProperty("owner", value: try MyRecord?.getDynamicType().convertToJS(self.owner, appContext: appContext))
+            let runtime = try appContext.runtime
+            let object = runtime.createObject()
+            object.setProperty("owner", value: try MyRecord?.encode(self.owner, in: runtime))
             return object
           }
         }
@@ -192,10 +196,10 @@ struct RecordMacroTests {
           var count: Int = 0
 
           private func _assertTypesConformance() {
-            func primary<T: AnyArgument>(_: T.Type) {
+            func primary<T: AnyArgument & JavaScriptDecodable & JavaScriptEncodable>(_: T.Type) {
             }
             primary(MyRecord.self)
-            func tags<T: AnyArgument>(_: T.Type) {
+            func tags<T: AnyArgument & JavaScriptDecodable & JavaScriptEncodable>(_: T.Type) {
             }
             tags([String].self)
           }
@@ -212,18 +216,19 @@ struct RecordMacroTests {
 
           @JavaScriptActor
           public static func from(object: borrowing JavaScriptObject, appContext: AppContext) throws -> Self {
+            let runtime = try appContext.runtime
             let primaryJSValue = object.getProperty("primary")
             guard !primaryJSValue.isUndefined() else {
               throw RecordPropertyRequiredException("primary")
             }
-            let primary = try MyRecord.getDynamicType().cast(jsValue: primaryJSValue, appContext: appContext) as! MyRecord
+            let primary = try MyRecord.decode(primaryJSValue, in: runtime)
             let tagsJSValue = object.getProperty("tags")
             guard !tagsJSValue.isUndefined() else {
               throw RecordPropertyRequiredException("tags")
             }
-            let tags = try [String].getDynamicType().cast(jsValue: tagsJSValue, appContext: appContext) as! [String]
+            let tags = try [String].decode(tagsJSValue, in: runtime)
             let countJSValue = object.getProperty("count")
-            let count = countJSValue.isUndefined() ? 0 : try Int.getDynamicType().cast(jsValue: countJSValue, appContext: appContext) as! Int
+            let count = countJSValue.isUndefined() ? 0 : try Int.decode(countJSValue, in: runtime)
             return Self(primary: primary, tags: tags, count: count)
           }
 
@@ -253,10 +258,11 @@ struct RecordMacroTests {
 
           @JavaScriptActor
           public func toObject(appContext: AppContext) throws -> JavaScriptObject {
-            let object = try appContext.runtime.createObject()
-            object.setProperty("primary", value: try MyRecord.getDynamicType().convertToJS(self.primary, appContext: appContext))
-            object.setProperty("tags", value: try [String].getDynamicType().convertToJS(self.tags, appContext: appContext))
-            object.setProperty("count", value: try Int.getDynamicType().convertToJS(self.count, appContext: appContext))
+            let runtime = try appContext.runtime
+            let object = runtime.createObject()
+            object.setProperty("primary", value: try MyRecord.encode(self.primary, in: runtime))
+            object.setProperty("tags", value: try [String].encode(self.tags, in: runtime))
+            object.setProperty("count", value: try Int.encode(self.count, in: runtime))
             return object
           }
         }
@@ -298,14 +304,15 @@ struct RecordMacroTests {
 
           @JavaScriptActor
           public static func from(object: borrowing JavaScriptObject, appContext: AppContext) throws -> Self {
+            let runtime = try appContext.runtime
             let nameJSValue = object.getProperty("name")
-            let name = nameJSValue.isUndefined() ? "foo" : try String.getDynamicType().cast(jsValue: nameJSValue, appContext: appContext) as! String
+            let name = nameJSValue.isUndefined() ? "foo" : try String.decode(nameJSValue, in: runtime)
             let ratioJSValue = object.getProperty("ratio")
-            let ratio = ratioJSValue.isUndefined() ? 1.0 : try Double.getDynamicType().cast(jsValue: ratioJSValue, appContext: appContext) as! Double
+            let ratio = ratioJSValue.isUndefined() ? 1.0 : try Double.decode(ratioJSValue, in: runtime)
             let countJSValue = object.getProperty("count")
-            let count = countJSValue.isUndefined() ? 0 : try Int.getDynamicType().cast(jsValue: countJSValue, appContext: appContext) as! Int
+            let count = countJSValue.isUndefined() ? 0 : try Int.decode(countJSValue, in: runtime)
             let flagJSValue = object.getProperty("flag")
-            let flag = flagJSValue.isUndefined() ? false : try Bool.getDynamicType().cast(jsValue: flagJSValue, appContext: appContext) as! Bool
+            let flag = flagJSValue.isUndefined() ? false : try Bool.decode(flagJSValue, in: runtime)
             return Self(name: name, ratio: ratio, count: count, flag: flag)
           }
 
@@ -332,11 +339,12 @@ struct RecordMacroTests {
 
           @JavaScriptActor
           public func toObject(appContext: AppContext) throws -> JavaScriptObject {
-            let object = try appContext.runtime.createObject()
-            object.setProperty("name", value: try String.getDynamicType().convertToJS(self.name, appContext: appContext))
-            object.setProperty("ratio", value: try Double.getDynamicType().convertToJS(self.ratio, appContext: appContext))
-            object.setProperty("count", value: try Int.getDynamicType().convertToJS(self.count, appContext: appContext))
-            object.setProperty("flag", value: try Bool.getDynamicType().convertToJS(self.flag, appContext: appContext))
+            let runtime = try appContext.runtime
+            let object = runtime.createObject()
+            object.setProperty("name", value: try String.encode(self.name, in: runtime))
+            object.setProperty("ratio", value: try Double.encode(self.ratio, in: runtime))
+            object.setProperty("count", value: try Int.encode(self.count, in: runtime))
+            object.setProperty("flag", value: try Bool.encode(self.flag, in: runtime))
             return object
           }
         }
@@ -405,11 +413,12 @@ struct RecordMacroTests {
 
           @JavaScriptActor
           public static func from(object: borrowing JavaScriptObject, appContext: AppContext) throws -> Self {
+            let runtime = try appContext.runtime
             let nameJSValue = object.getProperty("name")
             guard !nameJSValue.isUndefined() else {
               throw RecordPropertyRequiredException("name")
             }
-            let name = try String.getDynamicType().cast(jsValue: nameJSValue, appContext: appContext) as! String
+            let name = try String.decode(nameJSValue, in: runtime)
             return Self(name: name)
           }
 
@@ -430,8 +439,9 @@ struct RecordMacroTests {
 
           @JavaScriptActor
           public func toObject(appContext: AppContext) throws -> JavaScriptObject {
-            let object = try appContext.runtime.createObject()
-            object.setProperty("name", value: try String.getDynamicType().convertToJS(self.name, appContext: appContext))
+            let runtime = try appContext.runtime
+            let object = runtime.createObject()
+            object.setProperty("name", value: try String.encode(self.name, in: runtime))
             return object
           }
         }
@@ -473,7 +483,8 @@ struct RecordMacroTests {
 
           @JavaScriptActor
           public func toObject(appContext: AppContext) throws -> JavaScriptObject {
-            let object = try appContext.runtime.createObject()
+            let runtime = try appContext.runtime
+            let object = runtime.createObject()
             return object
           }
         }
@@ -509,10 +520,11 @@ struct RecordMacroTests {
 
           @JavaScriptActor
           public static func from(object: borrowing JavaScriptObject, appContext: AppContext) throws -> Self {
+            let runtime = try appContext.runtime
             let xJSValue = object.getProperty("x")
-            let x = xJSValue.isUndefined() ? 0 : try Double.getDynamicType().cast(jsValue: xJSValue, appContext: appContext) as! Double
+            let x = xJSValue.isUndefined() ? 0 : try Double.decode(xJSValue, in: runtime)
             let yJSValue = object.getProperty("y")
-            let y = yJSValue.isUndefined() ? 0 : try Double.getDynamicType().cast(jsValue: yJSValue, appContext: appContext) as! Double
+            let y = yJSValue.isUndefined() ? 0 : try Double.decode(yJSValue, in: runtime)
             return Self(x: x, y: y)
           }
 
@@ -533,9 +545,10 @@ struct RecordMacroTests {
 
           @JavaScriptActor
           public func toObject(appContext: AppContext) throws -> JavaScriptObject {
-            let object = try appContext.runtime.createObject()
-            object.setProperty("x", value: try Double.getDynamicType().convertToJS(self.x, appContext: appContext))
-            object.setProperty("y", value: try Double.getDynamicType().convertToJS(self.y, appContext: appContext))
+            let runtime = try appContext.runtime
+            let object = runtime.createObject()
+            object.setProperty("x", value: try Double.encode(self.x, in: runtime))
+            object.setProperty("y", value: try Double.encode(self.y, in: runtime))
             return object
           }
         }
@@ -565,8 +578,9 @@ struct RecordMacroTests {
 
           @JavaScriptActor
           public static func from(object: borrowing JavaScriptObject, appContext: AppContext) throws -> Self {
+            let runtime = try appContext.runtime
             let extraJSValue = object.getProperty("extra")
-            let extra = extraJSValue.isUndefined() ? "" : try String.getDynamicType().cast(jsValue: extraJSValue, appContext: appContext) as! String
+            let extra = extraJSValue.isUndefined() ? "" : try String.decode(extraJSValue, in: runtime)
             return Self(extra: extra)
           }
 
@@ -584,8 +598,9 @@ struct RecordMacroTests {
 
           @JavaScriptActor
           public override func toObject(appContext: AppContext) throws -> JavaScriptObject {
+            let runtime = try appContext.runtime
             let object = try super.toObject(appContext: appContext)
-            object.setProperty("extra", value: try String.getDynamicType().convertToJS(self.extra, appContext: appContext))
+            object.setProperty("extra", value: try String.encode(self.extra, in: runtime))
             return object
           }
         }
@@ -612,11 +627,12 @@ struct RecordMacroTests {
 
           @JavaScriptActor
           public static func from(object: borrowing JavaScriptObject, appContext: AppContext) throws -> Self {
+            let runtime = try appContext.runtime
             let nameJSValue = object.getProperty("name")
             guard !nameJSValue.isUndefined() else {
               throw RecordPropertyRequiredException("name")
             }
-            let name = try String.getDynamicType().cast(jsValue: nameJSValue, appContext: appContext) as! String
+            let name = try String.decode(nameJSValue, in: runtime)
             return Self(name: name)
           }
 
@@ -637,8 +653,9 @@ struct RecordMacroTests {
 
           @JavaScriptActor
           public func toObject(appContext: AppContext) throws -> JavaScriptObject {
-            let object = try appContext.runtime.createObject()
-            object.setProperty("name", value: try String.getDynamicType().convertToJS(self.name, appContext: appContext))
+            let runtime = try appContext.runtime
+            let object = runtime.createObject()
+            object.setProperty("name", value: try String.encode(self.name, in: runtime))
             return object
           }
         }
@@ -672,11 +689,12 @@ struct RecordMacroTests {
 
           @JavaScriptActor
           public static func from(object: borrowing JavaScriptObject, appContext: AppContext) throws -> Self {
+            let runtime = try appContext.runtime
             let nameJSValue = object.getProperty("name")
             guard !nameJSValue.isUndefined() else {
               throw RecordPropertyRequiredException("name")
             }
-            let name = try String.getDynamicType().cast(jsValue: nameJSValue, appContext: appContext) as! String
+            let name = try String.decode(nameJSValue, in: runtime)
             return Self(name: name)
           }
 
@@ -697,8 +715,9 @@ struct RecordMacroTests {
 
           @JavaScriptActor
           public func toObject(appContext: AppContext) throws -> JavaScriptObject {
-            let object = try appContext.runtime.createObject()
-            object.setProperty("name", value: try String.getDynamicType().convertToJS(self.name, appContext: appContext))
+            let runtime = try appContext.runtime
+            let object = runtime.createObject()
+            object.setProperty("name", value: try String.encode(self.name, in: runtime))
             return object
           }
         }
@@ -789,10 +808,11 @@ struct RecordMacroTests {
 
           @JavaScriptActor
           public static func from(object: borrowing JavaScriptObject, appContext: AppContext) throws -> Self {
+            let runtime = try appContext.runtime
             let xJSValue = object.getProperty("x")
-            let x = xJSValue.isUndefined() ? 0 : try Double.getDynamicType().cast(jsValue: xJSValue, appContext: appContext) as! Double
+            let x = xJSValue.isUndefined() ? 0 : try Double.decode(xJSValue, in: runtime)
             let yJSValue = object.getProperty("y")
-            let y = yJSValue.isUndefined() ? 0 : try Double.getDynamicType().cast(jsValue: yJSValue, appContext: appContext) as! Double
+            let y = yJSValue.isUndefined() ? 0 : try Double.decode(yJSValue, in: runtime)
             return Self(x: x, y: y)
           }
 
@@ -813,9 +833,10 @@ struct RecordMacroTests {
 
           @JavaScriptActor
           public func toObject(appContext: AppContext) throws -> JavaScriptObject {
-            let object = try appContext.runtime.createObject()
-            object.setProperty("x", value: try Double.getDynamicType().convertToJS(self.x, appContext: appContext))
-            object.setProperty("y", value: try Double.getDynamicType().convertToJS(self.y, appContext: appContext))
+            let runtime = try appContext.runtime
+            let object = runtime.createObject()
+            object.setProperty("x", value: try Double.encode(self.x, in: runtime))
+            object.setProperty("y", value: try Double.encode(self.y, in: runtime))
             return object
           }
         }
@@ -856,10 +877,11 @@ struct RecordMacroTests {
 
           @JavaScriptActor
           public static func from(object: borrowing JavaScriptObject, appContext: AppContext) throws -> Self {
+            let runtime = try appContext.runtime
             let xJSValue = object.getProperty("x")
-            let x = xJSValue.isUndefined() ? 0 : try Double.getDynamicType().cast(jsValue: xJSValue, appContext: appContext) as! Double
+            let x = xJSValue.isUndefined() ? 0 : try Double.decode(xJSValue, in: runtime)
             let yJSValue = object.getProperty("y")
-            let y = yJSValue.isUndefined() ? 0 : try Double.getDynamicType().cast(jsValue: yJSValue, appContext: appContext) as! Double
+            let y = yJSValue.isUndefined() ? 0 : try Double.decode(yJSValue, in: runtime)
             return Self(x: x, y: y)
           }
 
@@ -880,9 +902,10 @@ struct RecordMacroTests {
 
           @JavaScriptActor
           public func toObject(appContext: AppContext) throws -> JavaScriptObject {
-            let object = try appContext.runtime.createObject()
-            object.setProperty("x", value: try Double.getDynamicType().convertToJS(self.x, appContext: appContext))
-            object.setProperty("y", value: try Double.getDynamicType().convertToJS(self.y, appContext: appContext))
+            let runtime = try appContext.runtime
+            let object = runtime.createObject()
+            object.setProperty("x", value: try Double.encode(self.x, in: runtime))
+            object.setProperty("y", value: try Double.encode(self.y, in: runtime))
             return object
           }
         }
