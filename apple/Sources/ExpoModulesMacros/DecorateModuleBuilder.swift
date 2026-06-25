@@ -90,23 +90,21 @@ internal struct JSFunction {
       // No omittable trailing run: a single flat call with every argument decoded.
       lines.append(contentsOf: callAndEncodeLines(receiver: receiver, arity: maximum, decodingFrom: required))
     } else {
-      // One call shape per accepted arity. Each branch decodes only the trailing slots it has and
-      // fills the rest (defaulted params drop their label so Swift applies the default; optional
-      // params are passed `nil`). A value-returning function binds the result from a `switch`
-      // expression and encodes once after it; a no-return one calls inline in a `switch` statement
-      // and returns `.undefined`.
-      if returnType != nil {
-        lines.append("let result = switch arguments.count {")
-      } else {
-        lines.append("switch arguments.count {")
+      // One call shape per accepted arity, branching on `arguments.count`. A branch decodes a
+      // trailing slot before the call, so this is a `switch` statement (not an expression): a
+      // value-returning function declares `result` up front and each branch assigns it.
+      if let returnType {
+        lines.append("let result: \(expressionType(returnType))")
       }
+      lines.append("switch arguments.count {")
       for arity in required...maximum {
         let label = arity == maximum ? "default:" : "case \(arity):"
         lines.append(label)
         for index in required..<arity {
           lines.append("  " + decodeStatement(at: index))
         }
-        lines.append("  \(callExpression(receiver: receiver, arity: arity))")
+        let assignment = returnType != nil ? "result = " : ""
+        lines.append("  \(assignment)\(callExpression(receiver: receiver, arity: arity))")
       }
       lines.append("}")
       lines.append(contentsOf: encodeResultLines())
