@@ -340,7 +340,7 @@ internal func buildDecorateJavaScriptObject(functions: [JSFunction], properties:
   let body = decorateBody(functions: functions, properties: properties, receiver: .module)
   return """
     @JavaScriptActor
-    public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
+    public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime) throws {
     \(raw: body)
     }
     """
@@ -361,7 +361,7 @@ internal func buildDecorateSharedObject(
   let body = decorateBody(functions: functions, properties: properties, receiver: .sharedObject(typeName: typeName))
   return """
     @JavaScriptActor
-    public override class func _decorateSharedObject(prototype: borrowing JavaScriptObject, in runtime: JavaScriptRuntime, appContext: AppContext) throws {
+    public override class func _decorateSharedObject(prototype: borrowing JavaScriptObject, in runtime: JavaScriptRuntime) throws {
     \(raw: body)
     }
     """
