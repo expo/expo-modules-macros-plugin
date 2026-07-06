@@ -161,7 +161,7 @@ struct SharedObjectMacroTests {
           @JavaScriptActor
           public override class func _decorateSharedObject(prototype: borrowing JavaScriptObject, in runtime: JavaScriptRuntime) throws {
             prototype.setProperty("loadAsync") { this, arguments in
-              let _self = try SharedObject.native(from: this.asObject(in: runtime), as: Cache.self)
+              let _self = try SharedObject.native(from: this.asObject(), as: Cache.self)
               guard arguments.count == 0 else {
                 throw Exceptions.ArgumentsRangeMismatch((functionName: "loadAsync", received: arguments.count, required: 0, maximum: 0))
               }
