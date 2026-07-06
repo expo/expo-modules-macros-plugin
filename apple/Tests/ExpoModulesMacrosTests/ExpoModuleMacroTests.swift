@@ -549,6 +549,7 @@ struct ExpoModuleMacroTests {
       """,
       expandedSource: """
         final class MyModule: Module {
+          @JavaScriptActor
           func performWork() async throws {}
 
           public static let _jsName = "MyModule"
@@ -584,6 +585,7 @@ struct ExpoModuleMacroTests {
       """,
       expandedSource: """
         final class MyModule: Module {
+          @JavaScriptActor
           func fetchValue(key: String) async throws -> Int { 0 }
 
           public static let _jsName = "MyModule"

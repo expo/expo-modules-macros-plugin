@@ -145,25 +145,19 @@ internal func memberHasJSAttribute(_ decl: DeclSyntaxProtocol) -> Bool {
   return false
 }
 
-/**
- Decides whether the macro should stamp `@JavaScriptActor` on a `@JS`-marked member.
- The macro defers to the user when they've already chosen an isolation:
- - the `nonisolated` modifier is present on the member
- - any attribute whose name matches a known global actor (`@MainActor`, `@JavaScriptActor`)
-   or follows the `*Actor` naming convention is present on the member or its enclosing type
- Async members never get the stamp because `AsyncFunction` controls their dispatch separately.
- */
+/// Decides whether the macro should stamp `@JavaScriptActor` on a `@JS`-marked member.
+/// The macro defers to the user when they've already chosen an isolation:
+/// - the `nonisolated` modifier is present on the member
+/// - any attribute whose name matches a known global actor (`@MainActor`, `@JavaScriptActor`)
+///   or follows the `*Actor` naming convention is present on the member or its enclosing type
+/// `async` members are stamped too: an `async` function starts its execution on the JS thread and
+/// stays there until the first suspension point, where it may hop to another executor.
 internal func shouldStampJavaScriptActor(
   on member: DeclSyntaxProtocol,
   enclosedBy enclosing: some DeclGroupSyntax
 ) -> Bool {
   let modifiers = memberModifiers(of: member)
   if modifiers.contains(where: { $0.name.text == "nonisolated" }) {
-    return false
-  }
-
-  if let funcDecl = member.as(FunctionDeclSyntax.self),
-    funcDecl.signature.effectSpecifiers?.asyncSpecifier != nil {
     return false
   }
 

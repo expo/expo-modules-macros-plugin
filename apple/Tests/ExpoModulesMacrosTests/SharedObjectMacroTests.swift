@@ -150,6 +150,7 @@ struct SharedObjectMacroTests {
       """,
       expandedSource: """
         final class Cache: SharedObject {
+          @JavaScriptActor
           func load() async throws {}
 
           public static func _synthesizedClassDefinition() -> ClassDefinition {
