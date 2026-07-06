@@ -60,7 +60,7 @@ internal struct JSFunction {
     let maximum = parameters.count
     var lines: [String] = []
 
-    if let unwrap = receiver.unwrapStatement {
+    if let unwrap = receiver.unwrapStatement(isAsync: isAsync) {
       lines.append(unwrap)
     }
 
@@ -253,8 +253,9 @@ internal struct JSProperty {
     let callee = receiver.callee
     let object = receiver.decoratedObject
     // A shared object's accessors unwrap the JS `this` into `_self` before reading/writing; a module
-    // reads `self` directly. The unwrap leads each accessor body.
-    let unwrap = receiver.unwrapStatement.map { "\($0)\n" } ?? ""
+    // reads `self` directly. The unwrap leads each accessor body. Property accessors are synchronous, so
+    // they take the borrowed unowned `this`.
+    let unwrap = receiver.unwrapStatement(isAsync: false).map { "\($0)\n" } ?? ""
     var lines: [String] = []
 
     lines.append("let \(descriptorName) = runtime.createObject()")

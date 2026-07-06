@@ -33,14 +33,19 @@ internal enum Receiver {
   }
 
   /// The leading body line binding the receiver, or `nil` for a module (it reads `self` directly). For a
-  /// shared object, `native(from:as:)` recovers the typed instance from the borrowed `this`, throwing on
-  /// a foreign object or a type mismatch.
-  var unwrapStatement: String? {
+  /// shared object, `native(from:as:)` recovers the typed instance from `this`, throwing on a foreign
+  /// object or a type mismatch.
+  ///
+  /// The `this` object comes from the borrowed `JavaScriptUnownedValue` in a sync binding (`asObject(in:)`)
+  /// and from the owning `JavaScriptValue` in an async one (`asObject()`). An async binding must take an
+  /// owning `this` because a borrowed unowned value can't survive the closure's suspension points.
+  func unwrapStatement(isAsync: Bool) -> String? {
     switch self {
     case .module:
       return nil
     case .sharedObject(let typeName):
-      return "let _self = try SharedObject.native(from: this.asObject(in: runtime), as: \(typeName).self)"
+      let thisObject = isAsync ? "this.asObject()" : "this.asObject(in: runtime)"
+      return "let _self = try SharedObject.native(from: \(thisObject), as: \(typeName).self)"
     }
   }
 
