@@ -2,16 +2,16 @@
 
 - **Status:** Draft for review (signatures verified against `expo/main` core)
 - **Author:** Tomasz Sapeta
-- **Created:** 2026-05-31 · **Updated:** 2026-06-25
+- **Created:** 2026-05-31 · **Updated:** 2026-07-08
 - **Scope:** Apple/Swift macros in this repo (`apple/Sources/ExpoModulesMacros`)
 
-### Implementation status (2026-06-25)
+### Implementation status (2026-07-08)
 
 This document describes the Apple/Swift macros; the JS-facing surface and TypeScript model
 are platform-neutral and an Android/KSP path can target them later (see
 [Platform-neutral model](#platform-neutral-model-androidksp-parity)).
 
-**iOS / Swift**, reconciled against `main` (PRs through #27). **Landed:** direct JSI binding
+**iOS / Swift**, reconciled against `main` (PRs through #31). **Landed:** direct JSI binding
 for `@JS` functions (#13), properties via `defineProperty` (#14), and `@SharedObject` via
 `_decorateSharedObject` (#22); range-based arity with default/optional-aware per-arity branches
 throwing `Exceptions.ArgumentsRangeMismatch` (#19: this closed the arity "Gap" the validation
@@ -20,12 +20,14 @@ macro (#17); compile-time `@JS`/`@Record` conformance assertions (#15); unowned-
 closures (#20); IUO-type normalization (#23); the `ExpoModulesScanner` CLI with `scan-modules`
 (#21); `@Record` field synthesis without `@Field` (#9); `@ExpoModule` auto-conformance to
 `AnyModule` (#5); `@JS` bindings and `@Record` field conversions through `JavaScriptCodable`
-(`decode`/`encode`) instead of the dynamic-type path (#26, #27); dropping the unused `appContext`
-parameter from the synthesized JSI hooks (this branch). **Not built (unblocked, pure-macro):**
+(`decode`/`encode`) instead of the dynamic-type path (#26, #27); the `scan-exports` deep
+type-export walk emitting `FileTypeInformationSerialized` JSON (#25); dropping the unused `appContext`
+parameter from the synthesized JSI hooks (#28); the omittable-trailing-arg per-arity `switch`
+codegen fix (#29); async `@JS` members stamped `@JavaScriptActor` (#30); unwrapping the async
+`@SharedObject` receiver from an owning `this` (#31). **Not built (unblocked, pure-macro):**
 overloaded-`@JS func` grouping/dispatch (duplicates collide silently today), `@Union`, and the
 decode index-bearing error wrap. **Not built (blocked on core):** `@ViewProps`/`@ExpoView` (view
-contract), `@JS static var` (`StaticProperty`), `@Event(sync:)` runtime (`emitSync`). **Stubbed:**
-`scan-exports` (the deep type-export walk for TypeScript generation). Per-section status callouts
+contract), `@JS static var` (`StaticProperty`), `@Event(sync:)` runtime (`emitSync`). Per-section status callouts
 below carry the detail.
 
 **Android / Kotlin (KSP):** **nothing built yet.** No KSP processor, no annotations, no
@@ -452,6 +454,9 @@ parameter**.
 > `checkIsolated`) so the runtime treats a same-thread call as no-hop. The
 > Promise-param `AsyncFunction` overload + `takesPromise` path can be retired from core
 > once nothing emits them.
+
+> **Status: shipped.** Async members are stamped `@JavaScriptActor` (#30), and the async
+> `@SharedObject` receiver is unwrapped from its owning `this` (#31).
 
 ### `@SharedObject`
 
@@ -1475,11 +1480,9 @@ It's a subcommand CLI, one mode per consumer:
 - **`scan-modules`** (built): fast path for `expo-modules-autolinking`: top-level `@ExpoModule`
   types only (the module class names autolinking registers). This is the new consumer the plan
   didn't anticipate; it's why the tool isn't named for type-gen.
-- **`scan-exports`** (stubbed): the type-generation front end: the deep walk of each type's
-  JS-exported surface (`@JS`/`@SharedObject`/`@Record` members, params, return types, fields).
-  Recognized as a
-  subcommand but currently exits "not yet implemented"; the member-level extraction and the
-  `FileTypeInformationSerialized` emission described above land in a later PR (Staging step 1–2).
+- **`scan-exports`** (built, #25): the type-generation front end: the deep walk of each type's
+  JS-exported surface (`@JS`/`@SharedObject`/`@Record` members, params, return types, fields),
+  emitting `FileTypeInformationSerialized` JSON.
 
 Output today is a JSON object: `detections` (per type: macro, name, declaration kind, JS-name
 override, every macro argument as label + source text, source location) plus `stats`
@@ -1539,9 +1542,9 @@ kept (if at all) only behind a flag.
 
 1. **Extractor MVP.** SwiftPM executable in the macros package, *done* as
    `ExpoModulesScanner` ([PR #21](https://github.com/expo/expo-modules-macros-plugin/pull/21)),
-   which detects the annotated types and the fast `scan-modules` path. Remaining for this step: the
-   `scan-exports` deep walk of functions + records emitting `FileTypeInformationSerialized` JSON for
-   a single file, golden-tested against the existing model shape.
+   which detects the annotated types and the fast `scan-modules` path, plus the
+   `scan-exports` deep walk of functions + records emitting `FileTypeInformationSerialized` JSON
+   ([PR #25](https://github.com/expo/expo-modules-macros-plugin/pull/25)).
 2. **Wire into `expo-type-information`.** Add a SwiftSyntax-backed front end that shells out
    to `ExpoTypeGen` and `deserializeTypeInformation`s the JSON, selectable alongside the
    SourceKitten one; run the *existing* emitter unchanged. Prove the `.d.ts` matches on a
