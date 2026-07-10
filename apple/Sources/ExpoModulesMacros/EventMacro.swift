@@ -297,24 +297,6 @@ private func isTypeLevelModifier(_ modifier: DeclModifierSyntax) -> Bool {
   return modifier.name.tokenKind == .keyword(.static) || modifier.name.tokenKind == .keyword(.class)
 }
 
-/// The function type underlying a property's type annotation, unwrapping attributes
-/// (`@Sendable (P) -> Void`) and single-element parentheses (`((P) -> Void)`). Returns `nil` when
-/// the annotation is missing or isn't a function type, including an optional function type:
-/// an event is always present, never `nil`.
-private func underlyingFunctionType(of type: TypeSyntax?) -> FunctionTypeSyntax? {
-  guard let type else {
-    return nil
-  }
-  if let attributed = type.as(AttributedTypeSyntax.self) {
-    return underlyingFunctionType(of: attributed.baseType)
-  }
-  if let tuple = type.as(TupleTypeSyntax.self),
-    tuple.elements.count == 1, let element = tuple.elements.first, element.firstName == nil {
-    return underlyingFunctionType(of: element.type)
-  }
-  return type.as(FunctionTypeSyntax.self)
-}
-
 /// True when the function type's return is written as `Void` / `()`. Function types always carry an
 /// explicit return clause, so unlike a function declaration there's no "absent" case. A module-qualified
 /// `Swift.Void` and redundant parentheses (`(Void)`, `(())`) are accepted too, so a valid void return

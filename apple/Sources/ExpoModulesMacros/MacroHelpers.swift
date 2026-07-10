@@ -43,6 +43,67 @@ internal func isOptionalType(_ type: TypeSyntax) -> Bool {
   return false
 }
 
+/// The function type underlying a property's type annotation, unwrapping attributes
+/// (`@Sendable (P) -> Void`) and single-element parentheses (`((P) -> Void)`). Returns `nil` when
+/// the annotation is missing or isn't a function type, including an optional function type:
+/// an event is always present, never `nil`.
+internal func underlyingFunctionType(of type: TypeSyntax?) -> FunctionTypeSyntax? {
+  guard let type else {
+    return nil
+  }
+  if let attributed = type.as(AttributedTypeSyntax.self) {
+    return underlyingFunctionType(of: attributed.baseType)
+  }
+  if let tuple = type.as(TupleTypeSyntax.self),
+    tuple.elements.count == 1, let element = tuple.elements.first, element.firstName == nil {
+    return underlyingFunctionType(of: element.type)
+  }
+  return type.as(FunctionTypeSyntax.self)
+}
+
+/// True if the type's inheritance clause already lists a protocol with the given name.
+/// Matches either the bare identifier (`Record`) or a qualified member access ending in
+/// the name (`ExpoModulesCore.Record`).
+internal func inheritsProtocol(named name: String, in declaration: some DeclGroupSyntax) -> Bool {
+  let inheritanceClause: InheritanceClauseSyntax?
+  if let structDecl = declaration.as(StructDeclSyntax.self) {
+    inheritanceClause = structDecl.inheritanceClause
+  } else if let classDecl = declaration.as(ClassDeclSyntax.self) {
+    inheritanceClause = classDecl.inheritanceClause
+  } else {
+    return false
+  }
+  guard let inherited = inheritanceClause?.inheritedTypes else {
+    return false
+  }
+  for entry in inherited {
+    let typeSyntax = entry.type
+    if let identifier = typeSyntax.as(IdentifierTypeSyntax.self),
+      identifier.name.text == name {
+      return true
+    }
+    if let member = typeSyntax.as(MemberTypeSyntax.self),
+      member.name.text == name {
+      return true
+    }
+  }
+  return false
+}
+
+/// True if the variable declaration carries a modifier that excludes it from being a property:
+/// `static`, `class` (type-level storage), `private`, `fileprivate`, or `lazy`.
+internal func isExcludedByModifier(_ modifiers: DeclModifierListSyntax) -> Bool {
+  for modifier in modifiers {
+    switch modifier.name.tokenKind {
+    case .keyword(.static), .keyword(.class), .keyword(.private), .keyword(.fileprivate), .keyword(.lazy):
+      return true
+    default:
+      continue
+    }
+  }
+  return false
+}
+
 /// True if a trailing occurrence of this parameter may be omitted by the JS caller: it either has a
 /// default value (Swift applies it) or is an optional type (an absent slot becomes `nil`). The arity
 /// range and the per-arity call branches are derived from this.
