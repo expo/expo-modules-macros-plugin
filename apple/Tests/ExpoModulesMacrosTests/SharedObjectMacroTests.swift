@@ -102,7 +102,7 @@ struct SharedObjectMacroTests {
   }
 
   @Test
-  func `Sync method binds via _decorateSharedObject, unwrapping the receiver from this`() {
+  func `Sync method binds via _decorateSharedObject(prototype:), unwrapping the receiver from this`() {
     assertExpansion(
       """
       @SharedObject
@@ -345,6 +345,140 @@ struct SharedObjectMacroTests {
             }
             let arg0 = try String.decode(arguments.unownedValue(at: 0), in: runtime)
             return Cache(name: arg0)
+          }
+        }
+        """
+    )
+  }
+
+  @Test
+  func `Static method binds via _decorateSharedObject(constructor:), calling the type and ignoring this`() {
+    assertExpansion(
+      """
+      @SharedObject
+      final class Cache: SharedObject {
+        @JS
+        static func open(_ path: String) -> Cache { Cache() }
+      }
+      """,
+      expandedSource: """
+        final class Cache: SharedObject {
+          @JavaScriptActor
+          static func open(_ path: String) -> Cache { Cache() }
+
+          private static func _assertTypesConformance_open() {
+            func open<Return: JavaScriptEncodable>(_: Return.Type) {
+            }
+            open(Cache.self)
+          }
+
+          public static func _synthesizedClassDefinition() -> ClassDefinition {
+            return Class("Cache", Cache.self) {
+            }
+          }
+
+          @JavaScriptActor
+          public override class func _decorateSharedObject(constructor: borrowing JavaScriptObject, in runtime: JavaScriptRuntime) throws {
+            constructor.setProperty("open") { (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
+              guard arguments.count == 1 else {
+                throw Exceptions.ArgumentsRangeMismatch((functionName: "open", received: arguments.count, required: 1, maximum: 1))
+              }
+              let arg0 = try String.decode(arguments.unownedValue(at: 0), in: runtime)
+              let result = Cache.open(arg0)
+              return try Cache.encode(result, in: runtime)
+            }
+          }
+        }
+        """
+    )
+  }
+
+  @Test
+  func `Static property binds a getter and setter onto the constructor, calling the type`() {
+    assertExpansion(
+      """
+      @SharedObject
+      final class Cache: SharedObject {
+        @JS
+        static var shared: Int = 0
+      }
+      """,
+      expandedSource: """
+        final class Cache: SharedObject {
+          @JavaScriptActor
+          static var shared: Int = 0
+
+          public static func _synthesizedClassDefinition() -> ClassDefinition {
+            return Class("Cache", Cache.self) {
+            }
+          }
+
+          @JavaScriptActor
+          public override class func _decorateSharedObject(constructor: borrowing JavaScriptObject, in runtime: JavaScriptRuntime) throws {
+            let sharedDescriptor = runtime.createObject()
+            sharedDescriptor.setProperty("enumerable", value: true)
+            sharedDescriptor.setProperty("get") { (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
+              return try Int.encode(Cache.shared, in: runtime)
+            }
+            sharedDescriptor.setProperty("set") { (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
+              Cache.shared = try Int.decode(arguments.unownedValue(at: 0), in: runtime)
+              return .undefined
+            }
+            constructor.defineProperty("shared", descriptor: sharedDescriptor)
+          }
+        }
+        """
+    )
+  }
+
+  @Test
+  func `Static and instance members of the same name decorate different objects`() {
+    assertExpansion(
+      """
+      @SharedObject
+      final class Cache: SharedObject {
+        @JS
+        func get(_ key: String) -> String? { nil }
+
+        @JS
+        static func get(_ key: String) -> String? { nil }
+      }
+      """,
+      expandedSource: """
+        final class Cache: SharedObject {
+          @JavaScriptActor
+          func get(_ key: String) -> String? { nil }
+          @JavaScriptActor
+          static func get(_ key: String) -> String? { nil }
+
+          public static func _synthesizedClassDefinition() -> ClassDefinition {
+            return Class("Cache", Cache.self) {
+            }
+          }
+
+          @JavaScriptActor
+          public override class func _decorateSharedObject(prototype: borrowing JavaScriptObject, in runtime: JavaScriptRuntime) throws {
+            prototype.setProperty("get") { (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
+              let _self = try SharedObject.native(from: this.asObject(in: runtime), as: Cache.self)
+              guard arguments.count == 1 else {
+                throw Exceptions.ArgumentsRangeMismatch((functionName: "get", received: arguments.count, required: 1, maximum: 1))
+              }
+              let arg0 = try String.decode(arguments.unownedValue(at: 0), in: runtime)
+              let result = _self.get(arg0)
+              return try String?.encode(result, in: runtime)
+            }
+          }
+
+          @JavaScriptActor
+          public override class func _decorateSharedObject(constructor: borrowing JavaScriptObject, in runtime: JavaScriptRuntime) throws {
+            constructor.setProperty("get") { (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
+              guard arguments.count == 1 else {
+                throw Exceptions.ArgumentsRangeMismatch((functionName: "get", received: arguments.count, required: 1, maximum: 1))
+              }
+              let arg0 = try String.decode(arguments.unownedValue(at: 0), in: runtime)
+              let result = Cache.get(arg0)
+              return try String?.encode(result, in: runtime)
+            }
           }
         }
         """

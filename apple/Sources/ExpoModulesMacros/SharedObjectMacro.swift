@@ -42,13 +42,20 @@ public struct SharedObjectMacro: MemberMacro {
     let jsName = jsNameArgument(of: node) ?? typeName
 
     // `@JS func`s/`var`s and the `@JS init` are bound directly into the shared object's JS object by
-    // the synthesized `_decorateSharedObject` / `_constructSharedObject` rather than described with a
-    // `Function(...)` / `Property(...)` / `Constructor { … }` DSL entry, so they're collected here
-    // instead of appended to the `Class` block. The block keeps only non-`@JS` definitions (none are
-    // collected today), so it's empty when every member is `@JS`.
+    // the synthesized `_decorateSharedObject(prototype:)` / `_decorateSharedObject(constructor:)` / `_constructSharedObject`
+    // rather than described with a `Function(...)` / `Property(...)` / `Constructor { … }` DSL entry, so
+    // they're collected here instead of appended to the `Class` block. The block keeps only non-`@JS`
+    // definitions (none are collected today), so it's empty when every member is `@JS`.
+    //
+    // Members split by the `static`/`class` modifier onto two different JS objects: instance members
+    // decorate the prototype (receiver recovered from JS `this`), static members decorate the
+    // constructor (called on the metatype). A JS instance and static member may share a name without
+    // colliding: they live on different objects.
     let entries: [String] = []
-    var functions: [JSFunction] = []
-    var properties: [JSProperty] = []
+    var instanceFunctions: [JSFunction] = []
+    var instanceProperties: [JSProperty] = []
+    var staticFunctions: [JSFunction] = []
+    var staticProperties: [JSProperty] = []
     var constructor: JSConstructor?
 
     for member in classDecl.memberBlock.members {
@@ -66,13 +73,23 @@ public struct SharedObjectMacro: MemberMacro {
 
       if let funcDecl = decl.as(FunctionDeclSyntax.self),
         let attribute = funcDecl.attributes.firstAttribute(named: "JS") {
-        functions.append(JSFunction(funcDecl: funcDecl, attribute: attribute))
+        let function = JSFunction(funcDecl: funcDecl, attribute: attribute)
+        if isTypeLevel(funcDecl.modifiers) {
+          staticFunctions.append(function)
+        } else {
+          instanceFunctions.append(function)
+        }
         continue
       }
 
       if let varDecl = decl.as(VariableDeclSyntax.self),
         let attribute = varDecl.attributes.firstAttribute(named: "JS") {
-        properties.append(contentsOf: collectProperties(varDecl: varDecl, attribute: attribute))
+        let collected = collectProperties(varDecl: varDecl, attribute: attribute)
+        if isTypeLevel(varDecl.modifiers) {
+          staticProperties.append(contentsOf: collected)
+        } else {
+          instanceProperties.append(contentsOf: collected)
+        }
       }
     }
 
@@ -89,13 +106,22 @@ public struct SharedObjectMacro: MemberMacro {
       """
     ]
 
-    // Direct JSI binding: one `_decorateSharedObject` that binds each `@JS func`/`var` onto the JS
-    // object (unwrapping the per-call receiver from `this`), and a `_constructSharedObject` that
-    // builds an instance from the `@JS init` arguments. Each is emitted only when it has something
-    // to do.
-    if !functions.isEmpty || !properties.isEmpty {
+    // Direct JSI binding, split by which JS object each member decorates:
+    // `_decorateSharedObject(prototype:)` binds instance `@JS func`/`var`s (unwrapping the per-call receiver from
+    // `this`); `_decorateSharedObject(constructor:)` binds `static`/`class` ones (called on the metatype); and
+    // `_constructSharedObject` builds an instance from the `@JS init` arguments. Each is emitted only
+    // when it has something to bind.
+    if !instanceFunctions.isEmpty || !instanceProperties.isEmpty {
       emitted.append(
-        buildDecorateSharedObject(functions: functions, properties: properties, typeName: typeName))
+        buildDecorateSharedObjectPhase(
+          phase: .prototype, functions: instanceFunctions, properties: instanceProperties,
+          typeName: typeName))
+    }
+    if !staticFunctions.isEmpty || !staticProperties.isEmpty {
+      emitted.append(
+        buildDecorateSharedObjectPhase(
+          phase: .constructor, functions: staticFunctions, properties: staticProperties,
+          typeName: typeName))
     }
     if let constructor {
       emitted.append(constructor.buildConstructor(typeName: typeName))

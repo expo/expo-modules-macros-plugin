@@ -43,6 +43,15 @@ internal func isOptionalType(_ type: TypeSyntax) -> Bool {
   return false
 }
 
+/// True when the modifiers make the member type-level (`static` or `class`). A shared object routes
+/// such members to its constructor (JS-static) and instance members to its prototype; the `@JS`
+/// conformance assertion also uses this to emit its peer in the matching metatype context.
+internal func isTypeLevel(_ modifiers: DeclModifierListSyntax) -> Bool {
+  return modifiers.contains {
+    $0.name.tokenKind == .keyword(.static) || $0.name.tokenKind == .keyword(.class)
+  }
+}
+
 /// True if a trailing occurrence of this parameter may be omitted by the JS caller: it either has a
 /// default value (Swift applies it) or is an optional type (an absent slot becomes `nil`). The arity
 /// range and the per-arity call branches are derived from this.

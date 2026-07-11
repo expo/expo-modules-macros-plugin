@@ -2,7 +2,7 @@ import SwiftSyntax
 
 /// A `@JS func` collected for **direct JSI binding**. Instead of describing the function with a
 /// `Function(...)` / `AsyncFunction(...)` DSL entry that the runtime interprets per call, the enclosing
-/// macro synthesizes a decorator (`_decorateModule` / `_decorateSharedObject`) that binds each such
+/// macro synthesizes a decorator (`_decorateModule(object:)` / `_decorateSharedObject(prototype:)`) that binds each such
 /// function into the JS object via the closure-taking `JavaScriptObject.setProperty(_:)`, with the
 /// decode-call-encode body inlined into the closure. This omits the `[Any]`/`toTuple` dynamic-call path:
 /// every argument is decoded individually by its static type.
@@ -194,7 +194,7 @@ internal struct JSFunction {
   /// the host-function closure is what keeps the native callable alive for as long as JS can invoke
   /// it; its lifetime is bounded by the JS VM's garbage collection of the object. A shared object
   /// captures nothing of the instance: it recovers the typed receiver from the JS `this` per call.
-  func decorateStatements(receiver: Receiver) -> String {
+  func decorateStatements(object: String, receiver: Receiver) -> String {
     // Synchronous `@JS` bindings bind through the unowned-`this` `setProperty` overload, which hands
     // `this` in as a borrowed `JavaScriptUnownedValue` instead of allocating an owning
     // `JavaScriptValue` and forming its `weak`-runtime reference on every call. A module ignores
@@ -210,7 +210,6 @@ internal struct JSFunction {
       ? "this, arguments"
       : "(this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer)"
 
-    let object = receiver.decoratedObject
     return """
         \(object).setProperty("\(jsName)") { \(captures)\(parameters) in
       \(bodyStatements(receiver: receiver, indent: "    "))
@@ -221,7 +220,7 @@ internal struct JSFunction {
 
 /// A `@JS var` collected for **direct JSI binding**. Instead of describing the property with a
 /// `Property(...)` DSL entry, the enclosing macro synthesizes a get/set accessor into the JS object
-/// inside its decorator (`_decorateModule` / `_decorateSharedObject`): it builds a descriptor object
+/// inside its decorator (`_decorateModule(object:)` / `_decorateSharedObject(prototype:)`): it builds a descriptor object
 /// (`enumerable` + `get`, and `set` when the property is settable) and installs it with
 /// `object.defineProperty(name, descriptor:)`, mirroring core's `PropertyDefinition.buildDescriptor`.
 /// The `get`/`set` host functions are installed the same way `@JS func`s are — the closure-taking
@@ -248,10 +247,9 @@ internal struct JSProperty {
   /// closure — and installs it with `object.defineProperty(name, descriptor:)`. Capture matches the
   /// function bindings: a module captures `self` strong, a shared object captures nothing of the
   /// instance. Getter and setter are gated independently.
-  func decorateStatements(receiver: Receiver) -> String {
+  func decorateStatements(object: String, receiver: Receiver) -> String {
     let descriptorName = "\(swiftName)Descriptor"
     let callee = receiver.callee
-    let object = receiver.decoratedObject
     // A shared object's accessors unwrap the JS `this` into `_self` before reading/writing; a module
     // reads `self` directly. The unwrap leads each accessor body. Property accessors are synchronous, so
     // they take the borrowed unowned `this`.
@@ -319,24 +317,30 @@ internal struct JSProperty {
   }
 }
 
-/// The body shared by both decorators: every `@JS func` bound via an inlined `setProperty` closure
-/// and every `@JS var` via a `defineProperty` accessor, joined for the function body. The `receiver`
-/// selects how each binding reaches its Swift value (module `self` vs. shared-object `_self`).
-private func decorateBody(functions: [JSFunction], properties: [JSProperty], receiver: Receiver) -> String {
-  let functionBody = functions.map { $0.decorateStatements(receiver: receiver) }
-  let propertyBody = properties.map { $0.decorateStatements(receiver: receiver) }
+/// The body shared by every decorator phase: every `@JS func` bound via an inlined `setProperty`
+/// closure and every `@JS var` via a `defineProperty` accessor, joined for the function body. `object`
+/// is the local the bindings decorate (matching the entry point's argument label); `receiver` selects
+/// how each binding reaches its Swift value (module `self`, shared-object instance `_self`, or the
+/// metatype for a static member).
+private func decorateBody(
+  functions: [JSFunction], properties: [JSProperty], object: String, receiver: Receiver
+) -> String {
+  let functionBody = functions.map { $0.decorateStatements(object: object, receiver: receiver) }
+  let propertyBody = properties.map { $0.decorateStatements(object: object, receiver: receiver) }
   return (functionBody + propertyBody).joined(separator: "\n")
 }
 
-/// The single generated function that decorates the module's JS object. Core supplies the object;
-/// this binds every `@JS func` (via an inlined `setProperty` closure) and every `@JS var` (via a
-/// `defineProperty` accessor) into it. Mirrors core's `ObjectDefinition.decorate(object:)`, including
-/// its `borrowing` object parameter (it mutates through the reference without reassigning or taking
-/// ownership). Named `_decorateModule` with the leading-underscore convention for synthesized members
-/// the **runtime calls by name**; the `ExpoModule` suffix names the `@ExpoModule` macro it came from (a
-/// shared object's counterpart is `_decorateSharedObject`). The bindings call into the module `self`.
+/// The module decorator: a `_decorateModule(object:)` that binds every `@JS func` (via an inlined
+/// `setProperty` closure) and every `@JS var` (via a `defineProperty` accessor) into the module's own
+/// JS object. Core supplies the object; the bindings call into the module `self`. It's an *instance*
+/// method (a module is a singleton, satisfying the `AnyModule` requirement of the same name), mirroring
+/// core's `ObjectDefinition.decorate(object:)` including the `borrowing` object parameter (it mutates
+/// through the reference without reassigning or taking ownership). Only emitted when there's at least
+/// one member to bind. Uses the shared body generation with the module `object:` phase and `self`
+/// receiver; the shared-object counterpart is `buildDecorateSharedObjectPhase`.
 internal func buildDecorateJavaScriptObject(functions: [JSFunction], properties: [JSProperty]) -> DeclSyntax {
-  let body = decorateBody(functions: functions, properties: properties, receiver: .module)
+  let body = decorateBody(
+    functions: functions, properties: properties, object: Phase.object.rawValue, receiver: .module)
   return """
     @JavaScriptActor
     public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime) throws {
@@ -345,22 +349,28 @@ internal func buildDecorateJavaScriptObject(functions: [JSFunction], properties:
     """
 }
 
-/// The shared-object counterpart of `_decorateModule`. Core supplies the class `prototype`; this binds
-/// every `@JS func` and `@JS var` of the given shared-object type onto it. Because a shared object has a
-/// distinct native instance behind each JS object, the bindings recover the typed receiver from the JS
-/// `this` per call (`try SharedObject.native(from: this.asObject(in: runtime), as: <Type>.self)`)
-/// rather than capturing a singleton `self`. Overrides the base `SharedObject` class method so core can
-/// dispatch to it through the concrete type's metatype. The first parameter is `prototype` (not `object`
-/// as on `_decorateModule`) because it's the shared class prototype, not an instance. The constructor is
-/// bound separately (see `JSConstructor.buildConstructor`). Only emitted when the type has at least one
-/// `@JS func`/`var`.
-internal func buildDecorateSharedObject(
-  functions: [JSFunction], properties: [JSProperty], typeName: String
+/// A shared-object decorator phase, a label overload of `_decorateSharedObject` overriding the matching
+/// `open class func` on the `SharedObject` base so core can dispatch through the concrete type's
+/// metatype. The `prototype:` overload binds the type's instance `@JS func`/`var` members onto the class
+/// prototype (the original hook, unchanged); the `constructor:` overload binds the `static`/`class` ones
+/// onto the constructor function itself (a new, additive overload, so introducing it isn't a breaking
+/// core change). Both are *static* (a shared object has no singleton `self`). An instance binding
+/// recovers its typed receiver from the JS `this` per call (`SharedObject.native(from:as:)`); a static
+/// binding calls the Swift member on the type and ignores `this` (which, on the static side, is the
+/// constructor). The constructor *object* the static members decorate is distinct from the `@JS init`,
+/// which builds an instance and is emitted separately (see `JSConstructor.buildConstructor`). Each phase
+/// is emitted only when the type has a member for it.
+internal func buildDecorateSharedObjectPhase(
+  phase: Phase, functions: [JSFunction], properties: [JSProperty], typeName: String
 ) -> DeclSyntax {
-  let body = decorateBody(functions: functions, properties: properties, receiver: .sharedObject(typeName: typeName))
+  let receiver: Receiver = phase == .constructor
+    ? .staticMember(typeName: typeName)
+    : .sharedObject(typeName: typeName)
+  let body = decorateBody(
+    functions: functions, properties: properties, object: phase.rawValue, receiver: receiver)
   return """
     @JavaScriptActor
-    public override class func _decorateSharedObject(prototype: borrowing JavaScriptObject, in runtime: JavaScriptRuntime) throws {
+    public override class func _decorateSharedObject(\(raw: phase.rawValue): borrowing JavaScriptObject, in runtime: JavaScriptRuntime) throws {
     \(raw: body)
     }
     """
