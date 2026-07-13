@@ -602,7 +602,9 @@ struct ExpoModuleMacroTests {
               }
               let arg0 = try String.decode(arguments.unownedValue(at: 0), in: runtime)
               let result = try await self.fetchValue(key: arg0)
-              return try Int.encode(result, in: runtime)
+              return try await runtime.execute {
+                return try Int.encode(result, in: runtime)
+              }
             }
           }
         }

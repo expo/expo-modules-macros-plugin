@@ -177,11 +177,26 @@ internal struct JSFunction {
   /// and throws instead of silently encoding an out-of-safe-range value as a lossy number — the
   /// catchable error is the right behavior, and matches how non-primitive integers already encode. A
   /// no-return function returns `.undefined` instead.
+  ///
+  /// For an `async` function the encode must run on the JS thread. An `async` body may suspend and
+  /// resume on an arbitrary cooperative-pool thread, and encoding a heap-allocated JS value (a string,
+  /// object, array, or typed array) off the JS thread races the engine's garbage collector and
+  /// corrupts the heap. `runtime.execute` hops the encode onto the JS thread, running inline when it is
+  /// already there (the common case, where the body never truly suspended), so synchronous functions —
+  /// which always run on the JS thread — keep encoding directly without the wrapper.
   private func encodeResultLines() -> [String] {
     guard let returnType else {
       return ["return .undefined"]
     }
-    return ["return try \(expressionType(returnType)).encode(result, in: runtime)"]
+    let encode = "try \(expressionType(returnType)).encode(result, in: runtime)"
+    if isAsync {
+      return [
+        "return try await runtime.execute {",
+        "  return \(encode)",
+        "}",
+      ]
+    }
+    return ["return \(encode)"]
   }
 
   /// The `setProperty` statement that installs this function on the JS object. The decode-call-encode
