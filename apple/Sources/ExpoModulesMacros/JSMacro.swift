@@ -98,14 +98,6 @@ private func boundaryMember(of declaration: some DeclSyntaxProtocol) -> Boundary
   return nil
 }
 
-/// True when the modifiers make the member type-level (`static` or `class`), so its assertion peer
-/// must be emitted in the same metatype context rather than as an instance member.
-private func isTypeLevel(_ modifiers: DeclModifierListSyntax) -> Bool {
-  return modifiers.contains {
-    $0.name.tokenKind == .keyword(.static) || $0.name.tokenKind == .keyword(.class)
-  }
-}
-
 /// True when a return clause is written as `Void` / `()` — nothing crosses the boundary, so it needs
 /// no conformance assertion. (A missing return clause never reaches here: `returnClause` is `nil`.)
 private func isVoidType(_ type: TypeSyntax) -> Bool {
