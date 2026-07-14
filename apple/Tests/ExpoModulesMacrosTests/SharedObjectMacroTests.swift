@@ -160,13 +160,15 @@ struct SharedObjectMacroTests {
 
           @JavaScriptActor
           public override class func _decorateSharedObject(prototype: borrowing JavaScriptObject, in runtime: JavaScriptRuntime) throws {
-            prototype.setProperty("loadAsync") { this, arguments in
-              let _self = try SharedObject.native(from: this.asObject(), as: Cache.self)
+            prototype.setProperty("loadAsync") { (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
+              let _self = try SharedObject.native(from: this.asObject(in: runtime), as: Cache.self)
               guard arguments.count == 0 else {
                 throw Exceptions.ArgumentsRangeMismatch((functionName: "loadAsync", received: arguments.count, required: 0, maximum: 0))
               }
-              try await _self.load()
-              return .undefined
+              return {
+                try await _self.load()
+                return .undefined
+              }
             }
           }
         }
@@ -386,6 +388,44 @@ struct SharedObjectMacroTests {
               let arg0 = try String.decode(arguments.unownedValue(at: 0), in: runtime)
               let result = Cache.open(arg0)
               return try Cache.encode(result, in: runtime)
+            }
+          }
+        }
+        """
+    )
+  }
+
+  @Test
+  func `Static async method decodes synchronously and returns the async body`() {
+    assertExpansion(
+      """
+      @SharedObject
+      final class Cache: SharedObject {
+        @JS
+        static func warmUp(_ path: String) async throws {}
+      }
+      """,
+      expandedSource: """
+        final class Cache: SharedObject {
+          @JavaScriptActor
+          static func warmUp(_ path: String) async throws {}
+
+          public static func _synthesizedClassDefinition() -> ClassDefinition {
+            return Class("Cache", Cache.self) {
+            }
+          }
+
+          @JavaScriptActor
+          public override class func _decorateSharedObject(constructor: borrowing JavaScriptObject, in runtime: JavaScriptRuntime) throws {
+            constructor.setProperty("warmUp") { (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
+              guard arguments.count == 1 else {
+                throw Exceptions.ArgumentsRangeMismatch((functionName: "warmUp", received: arguments.count, required: 1, maximum: 1))
+              }
+              let arg0 = try String.decode(arguments.unownedValue(at: 0), in: runtime)
+              return {
+                try await Cache.warmUp(arg0)
+                return .undefined
+              }
             }
           }
         }

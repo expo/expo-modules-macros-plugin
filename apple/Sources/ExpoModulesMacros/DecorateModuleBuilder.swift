@@ -4,12 +4,15 @@ import SwiftSyntax
 /// `Function(...)` / `AsyncFunction(...)` DSL entry that the runtime interprets per call, the enclosing
 /// macro synthesizes a decorator (`_decorateModule(object:)` / `_decorateSharedObject(prototype:)`) that binds each such
 /// function into the JS object via the closure-taking `JavaScriptObject.setProperty(_:)`, with the
-/// decode-call-encode body inlined into the closure. This omits the `[Any]`/`toTuple` dynamic-call path:
+/// decode-call-encode body inlined into the closure. This omits the dynamic-call path entirely:
 /// every argument is decoded individually by its static type.
 ///
 /// The receiver (see `Receiver`) is the module's `self` for a module binding, or the per-call `_self`
-/// unwrapped from the JS `this` for a shared-object binding. An `async` `@JS func` produces an `async`
-/// closure body and is installed through the async `setProperty(_:)` overload (so JS gets a promise).
+/// unwrapped from the JS `this` for a shared-object binding. An `async` `@JS func` binds through the
+/// two-phase async `setProperty(_:)` overload: the closure is the synchronous decode phase (receiver
+/// unwrap, arity guard, argument decode, all while `this` and the arguments are still valid)
+/// and returns the async body (call and result encode), so nothing JSI-owned crosses the asynchronous
+/// boundary and JS gets a promise.
 internal struct JSFunction {
   let swiftName: String
   let jsName: String
@@ -60,7 +63,7 @@ internal struct JSFunction {
     let maximum = parameters.count
     var lines: [String] = []
 
-    if let unwrap = receiver.unwrapStatement(isAsync: isAsync) {
+    if let unwrap = receiver.unwrapStatement {
       lines.append(unwrap)
     }
 
@@ -87,8 +90,31 @@ internal struct JSFunction {
     }
 
     if required == maximum {
-      // No omittable trailing run: a single flat call with every argument decoded.
-      lines.append(contentsOf: callAndEncodeLines(receiver: receiver, arity: maximum, decodingFrom: required))
+      // No omittable trailing run: a single flat call with every argument decoded. An async
+      // function decodes any remaining slots here (still the synchronous phase) and returns its
+      // body; a sync one calls and encodes directly.
+      if isAsync {
+        for index in required..<maximum {
+          lines.append(decodeStatement(at: index))
+        }
+        lines.append(contentsOf: asyncBodyLines(receiver: receiver, arity: maximum))
+      } else {
+        lines.append(contentsOf: callAndEncodeLines(receiver: receiver, arity: maximum, decodingFrom: required))
+      }
+    } else if isAsync {
+      // One body per accepted arity, branching on `arguments.count`. A branch decodes its trailing
+      // slots synchronously and returns the async body for that call shape, so each `return` ends
+      // the decode phase for its arity.
+      lines.append("switch arguments.count {")
+      for arity in required...maximum {
+        let label = arity == maximum ? "default:" : "case \(arity):"
+        lines.append(label)
+        for index in required..<arity {
+          lines.append("  " + decodeStatement(at: index))
+        }
+        lines.append(contentsOf: asyncBodyLines(receiver: receiver, arity: arity).map { "  " + $0 })
+      }
+      lines.append("}")
     } else {
       // One call shape per accepted arity, branching on `arguments.count`. A branch decodes a
       // trailing slot before the call, so this is a `switch` statement (not an expression): a
@@ -114,6 +140,24 @@ internal struct JSFunction {
       .flatMap { $0.split(separator: "\n", omittingEmptySubsequences: false) }
       .map { indent + $0 }
       .joined(separator: "\n")
+  }
+
+  /// The `return { … }` statement closing an async binding's decode phase: the returned closure is
+  /// the function's async body (`AsyncFunctionBody`), awaiting the call and encoding the result. It
+  /// captures only what the call needs — the decoded `arg<i>` locals, the receiver, and `runtime`
+  /// for the encode — never `this` or the arguments buffer, which are only valid for the duration
+  /// of the host call.
+  private func asyncBodyLines(receiver: Receiver, arity: Int) -> [String] {
+    var lines: [String] = ["return {"]
+    if returnType != nil {
+      lines.append("  let result = \(callExpression(receiver: receiver, arity: arity))")
+      lines.append(contentsOf: encodeResultLines().map { "  " + $0 })
+    } else {
+      lines.append("  \(callExpression(receiver: receiver, arity: arity))")
+      lines.append("  return .undefined")
+    }
+    lines.append("}")
+    return lines
   }
 
   /// `let arg<index> = …` decoding the slot at `index` by its static type through
@@ -202,28 +246,25 @@ internal struct JSFunction {
   /// The `setProperty` statement that installs this function on the JS object. The decode-call-encode
   /// body is inlined directly into the closure passed to the closure-taking `setProperty` overload
   /// (which creates the host function under the hood) — no separate named binding. For an `async`
-  /// function the body `await`s the call, which selects the async `setProperty` overload (so JS
-  /// receives a promise).
+  /// function the closure is the synchronous decode phase and returns the async body, which selects
+  /// the async `setProperty` overload (so JS receives a promise).
   ///
-  /// Capture mirrors core's `SyncFunctionDefinition.build`: a module captures its `self` **strong** —
+  /// A module captures its `self` **strong** —
   /// the host-function closure is what keeps the native callable alive for as long as JS can invoke
   /// it; its lifetime is bounded by the JS VM's garbage collection of the object. A shared object
   /// captures nothing of the instance: it recovers the typed receiver from the JS `this` per call.
   func decorateStatements(object: String, receiver: Receiver) -> String {
-    // Synchronous `@JS` bindings bind through the unowned-`this` `setProperty` overload, which hands
-    // `this` in as a borrowed `JavaScriptUnownedValue` instead of allocating an owning
-    // `JavaScriptValue` and forming its `weak`-runtime reference on every call. A module ignores
-    // `this`; a shared object unwraps it (still borrowed). The first parameter is typed `borrowing
-    // JavaScriptUnownedValue` to select that (otherwise `@_disfavoredOverload`) overload — which
-    // requires the *parenthesized, fully typed* parameter list, since Swift rejects a type annotation
-    // on a shorthand `{ [capture] name, name in }` parameter. Async functions keep the untyped
-    // shorthand and the owning-`this` overload: there is no unowned-`this` async variant and the buffer
-    // escapes into the task anyway.
+    // Every `@JS` binding hands `this` in as a borrowed `JavaScriptUnownedValue` instead of
+    // allocating an owning `JavaScriptValue` and forming its `weak`-runtime reference on every call,
+    // and consumes the arguments buffer — sync and async closures share one parameter shape and
+    // differ only in what they return. A module ignores `this`; a shared object unwraps it (still
+    // borrowed) — an async binding does so in its synchronous decode phase, before the borrow ends.
+    // The parameter list is parenthesized and fully typed, since Swift rejects a type annotation on
+    // a shorthand `{ [capture] name, name in }` parameter; for a sync binding the explicit
+    // `JavaScriptUnownedValue` also selects the (otherwise `@_disfavoredOverload`) unowned-`this`
+    // overload.
     let captures = receiver.captureClause
-    let parameters =
-      isAsync
-      ? "this, arguments"
-      : "(this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer)"
+    let parameters = "(this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer)"
 
     return """
         \(object).setProperty("\(jsName)") { \(captures)\(parameters) in
@@ -237,7 +278,7 @@ internal struct JSFunction {
 /// `Property(...)` DSL entry, the enclosing macro synthesizes a get/set accessor into the JS object
 /// inside its decorator (`_decorateModule(object:)` / `_decorateSharedObject(prototype:)`): it builds a descriptor object
 /// (`enumerable` + `get`, and `set` when the property is settable) and installs it with
-/// `object.defineProperty(name, descriptor:)`, mirroring core's `PropertyDefinition.buildDescriptor`.
+/// `object.defineProperty(name, descriptor:)`.
 /// The `get`/`set` host functions are installed the same way `@JS func`s are — the closure-taking
 /// `setProperty(_:)` overload, with the read/write body inlined into the closure.
 ///
@@ -268,7 +309,7 @@ internal struct JSProperty {
     // A shared object's accessors unwrap the JS `this` into `_self` before reading/writing; a module
     // reads `self` directly. The unwrap leads each accessor body. Property accessors are synchronous, so
     // they take the borrowed unowned `this`.
-    let unwrap = receiver.unwrapStatement(isAsync: false).map { "\($0)\n" } ?? ""
+    let unwrap = receiver.unwrapStatement.map { "\($0)\n" } ?? ""
     var lines: [String] = []
 
     lines.append("let \(descriptorName) = runtime.createObject()")
@@ -348,9 +389,9 @@ private func decorateBody(
 /// The module decorator: a `_decorateModule(object:)` that binds every `@JS func` (via an inlined
 /// `setProperty` closure) and every `@JS var` (via a `defineProperty` accessor) into the module's own
 /// JS object. Core supplies the object; the bindings call into the module `self`. It's an *instance*
-/// method (a module is a singleton, satisfying the `AnyModule` requirement of the same name), mirroring
-/// core's `ObjectDefinition.decorate(object:)` including the `borrowing` object parameter (it mutates
-/// through the reference without reassigning or taking ownership). Only emitted when there's at least
+/// method (a module is a singleton, satisfying the `AnyModule` requirement of the same name), with a
+/// `borrowing` object parameter (it mutates through the reference without reassigning or taking
+/// ownership). Only emitted when there's at least
 /// one member to bind. Uses the shared body generation with the module `object:` phase and `self`
 /// receiver; the shared-object counterpart is `buildDecorateSharedObjectPhase`.
 internal func buildDecorateJavaScriptObject(functions: [JSFunction], properties: [JSProperty]) -> DeclSyntax {

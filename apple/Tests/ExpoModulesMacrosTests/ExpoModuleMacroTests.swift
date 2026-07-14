@@ -560,12 +560,14 @@ struct ExpoModuleMacroTests {
 
           @JavaScriptActor
           public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime) throws {
-            object.setProperty("doWork") { [self] this, arguments in
+            object.setProperty("doWork") { [self] (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
               guard arguments.count == 0 else {
                 throw Exceptions.ArgumentsRangeMismatch((functionName: "doWork", received: arguments.count, required: 0, maximum: 0))
               }
-              try await self.performWork()
-              return .undefined
+              return {
+                try await self.performWork()
+                return .undefined
+              }
             }
           }
         }
@@ -596,14 +598,68 @@ struct ExpoModuleMacroTests {
 
           @JavaScriptActor
           public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime) throws {
-            object.setProperty("fetchValue") { [self] this, arguments in
+            object.setProperty("fetchValue") { [self] (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
               guard arguments.count == 1 else {
                 throw Exceptions.ArgumentsRangeMismatch((functionName: "fetchValue", received: arguments.count, required: 1, maximum: 1))
               }
               let arg0 = try String.decode(arguments.unownedValue(at: 0), in: runtime)
-              let result = try await self.fetchValue(key: arg0)
-              return try await runtime.execute {
-                return try Int.encode(result, in: runtime)
+              return {
+                let result = try await self.fetchValue(key: arg0)
+                return try await runtime.execute {
+                  return try Int.encode(result, in: runtime)
+                }
+              }
+            }
+          }
+        }
+        """
+    )
+  }
+
+  @Test
+  func `Async function with a trailing optional parameter returns a body per accepted arity`() {
+    assertExpansion(
+      """
+      @ExpoModule
+      final class MyModule: Module {
+        @JS
+        func find(key: String, limit: Int?) async throws -> Int { 0 }
+      }
+      """,
+      expandedSource: """
+        final class MyModule: Module {
+          @JavaScriptActor
+          func find(key: String, limit: Int?) async throws -> Int { 0 }
+
+          public static let _jsName = "MyModule"
+
+          public func _synthesizedDefinition() -> [AnyDefinition] {
+            return []
+          }
+
+          @JavaScriptActor
+          public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime) throws {
+            object.setProperty("find") { [self] (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
+              guard arguments.count >= 1 && arguments.count <= 2 else {
+                throw Exceptions.ArgumentsRangeMismatch((functionName: "find", received: arguments.count, required: 1, maximum: 2))
+              }
+              let arg0 = try String.decode(arguments.unownedValue(at: 0), in: runtime)
+              switch arguments.count {
+              case 1:
+                return {
+                  let result = try await self.find(key: arg0, limit: nil)
+                  return try await runtime.execute {
+                    return try Int.encode(result, in: runtime)
+                  }
+                }
+              default:
+                let arg1 = try Int?.decode(arguments.unownedValue(at: 1), in: runtime)
+                return {
+                  let result = try await self.find(key: arg0, limit: arg1)
+                  return try await runtime.execute {
+                    return try Int.encode(result, in: runtime)
+                  }
+                }
               }
             }
           }
