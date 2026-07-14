@@ -39,16 +39,15 @@ internal enum Receiver {
   /// `native(from:as:)` recovers the typed instance from `this`, throwing on a foreign object or a type
   /// mismatch.
   ///
-  /// The `this` object comes from the borrowed `JavaScriptUnownedValue` in a sync binding (`asObject(in:)`)
-  /// and from the owning `JavaScriptValue` in an async one (`asObject()`). An async binding must take an
-  /// owning `this` because a borrowed unowned value can't survive the closure's suspension points.
-  func unwrapStatement(isAsync: Bool) -> String? {
+  /// The `this` object always comes from the borrowed `JavaScriptUnownedValue` (`asObject(in:)`): an
+  /// async binding unwraps in its synchronous decode phase, before the borrowed value's lifetime ends,
+  /// and only the recovered native instance crosses into the async body.
+  var unwrapStatement: String? {
     switch self {
     case .module, .staticMember:
       return nil
     case .sharedObject(let typeName):
-      let thisObject = isAsync ? "this.asObject()" : "this.asObject(in: runtime)"
-      return "let _self = try SharedObject.native(from: \(thisObject), as: \(typeName).self)"
+      return "let _self = try SharedObject.native(from: this.asObject(in: runtime), as: \(typeName).self)"
     }
   }
 
@@ -67,7 +66,7 @@ internal enum Receiver {
 /// Which JS object a set of bindings is installed on: the second orthogonal axis alongside `Receiver`.
 /// It selects the decorator entry point's argument label and the local name the body binds members onto,
 /// mirroring JS class semantics (a class has a constructor function whose `.prototype` carries instance
-/// members) and core's `ClassDefinition.decorate`.
+/// members).
 /// The raw value is the argument label of the decorator entry point, which is also the local name the
 /// body binds members onto.
 internal enum Phase: String {
