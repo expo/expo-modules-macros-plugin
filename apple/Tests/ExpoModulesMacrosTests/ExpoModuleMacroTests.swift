@@ -1386,9 +1386,54 @@ struct ExpoModuleMacroTests {
       diagnostics: [
         DiagnosticSpec(
           message:
-            "A @JS function can't return a free-form 'Any' type: there's no way to encode an untyped value back to JavaScript. Return a concrete type, or 'JavaScriptValue' to pass a JS value through unchanged.",
+            "A @JS function can't return the free-form '[String: Any]': there's no way to encode an untyped value back to JavaScript. Use '[String: JavaScriptValue]', or 'JavaScriptValue' to pass a JS value through unchanged.",
           line: 5,
           column: 18,
+          severity: .error
+        )
+      ]
+    )
+  }
+
+  @Test
+  func `Bare Any return type is an error suggesting a concrete type`() {
+    assertExpansion(
+      """
+      @ExpoModule
+      final class MyModule: Module {
+        @JS
+        func raw() -> Any { 0 }
+      }
+      """,
+      expandedSource: """
+        final class MyModule: Module {
+          @JavaScriptActor
+          func raw() -> Any { 0 }
+
+          public static let _jsName = "MyModule"
+
+          public func _synthesizedDefinition() -> [AnyDefinition] {
+            return []
+          }
+
+          @JavaScriptActor
+          public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime) throws {
+            object.setProperty("raw") { [self] (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
+              guard arguments.count == 0 else {
+                throw Exceptions.ArgumentsRangeMismatch((functionName: "raw", received: arguments.count, required: 0, maximum: 0))
+              }
+              let result = self.raw()
+              return try Any.encode(result, in: runtime)
+            }
+          }
+        }
+        """,
+      diagnostics: [
+        DiagnosticSpec(
+          message:
+            "A @JS function can't return the free-form 'Any': there's no way to encode an untyped value back to JavaScript. Use a concrete type, or 'JavaScriptValue' to pass a JS value through unchanged.",
+          line: 5,
+          column: 17,
           severity: .error
         )
       ]
@@ -1434,7 +1479,7 @@ struct ExpoModuleMacroTests {
       diagnostics: [
         DiagnosticSpec(
           message:
-            "A @JS property can't have a free-form 'Any' type: its getter would have to encode an untyped value back to JavaScript, which isn't supported. Use a concrete type, or 'JavaScriptValue' to expose a JS value directly.",
+            "A @JS property can't have the free-form '[String: Any]': its getter would have to encode an untyped value back to JavaScript, which isn't supported. Use '[String: JavaScriptValue]', or 'JavaScriptValue' to pass a JS value through unchanged.",
           line: 5,
           column: 17,
           severity: .error

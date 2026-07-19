@@ -67,7 +67,8 @@ private func diagnoseFreeFormTypes(
     warnFreeFormArguments(funcDecl.signature.parameterClause.parameters, in: context)
     if let returnType = funcDecl.signature.returnClause?.type,
       isFreeFormBoundaryType(returnType.trimmedDescription) {
-      context.diagnose(Diagnostic(node: returnType, message: freeFormReturnError))
+      context.diagnose(
+        Diagnostic(node: returnType, message: freeFormReturnError(for: returnType.trimmedDescription)))
     }
     return
   }
@@ -82,8 +83,19 @@ private func diagnoseFreeFormTypes(
   if let varDecl = declaration.as(VariableDeclSyntax.self),
     let type = varDecl.bindings.first?.typeAnnotation?.type,
     isFreeFormBoundaryType(type.trimmedDescription) {
-    context.diagnose(Diagnostic(node: type, message: freeFormPropertyError))
+    context.diagnose(
+      Diagnostic(node: type, message: freeFormPropertyError(for: type.trimmedDescription)))
   }
+}
+
+/// The tail of a free-form encode error: the reshaped `JavaScriptValue` alternative when the type is a
+/// container (`[String: Any]` -> `[String: JavaScriptValue]`), otherwise the passthrough suggestion
+/// for a bare `Any`. Both conform to the codable protocols, so either is a valid fix.
+private func suggestedAlternative(for freeFormType: String) -> String {
+  if let reshaped = typedFreeFormReplacement(for: freeFormType), reshaped != "JavaScriptValue" {
+    return "Use '\(reshaped)', or 'JavaScriptValue' to pass a JS value through unchanged."
+  }
+  return "Use a concrete type, or 'JavaScriptValue' to pass a JS value through unchanged."
 }
 
 /// Emits the steering warning for each free-form parameter in a list. Shared by the function and
@@ -115,17 +127,21 @@ private func freeFormArgumentWarning(
   )
 }
 
-private let freeFormReturnError = JSDiagnosticMessage(
-  "A @JS function can't return a free-form 'Any' type: there's no way to encode an untyped value back to JavaScript. Return a concrete type, or 'JavaScriptValue' to pass a JS value through unchanged.",
-  id: "js-free-form-return",
-  severity: .error
-)
+private func freeFormReturnError(for freeFormType: String) -> JSDiagnosticMessage {
+  return JSDiagnosticMessage(
+    "A @JS function can't return the free-form '\(freeFormType)': there's no way to encode an untyped value back to JavaScript. \(suggestedAlternative(for: freeFormType))",
+    id: "js-free-form-return",
+    severity: .error
+  )
+}
 
-private let freeFormPropertyError = JSDiagnosticMessage(
-  "A @JS property can't have a free-form 'Any' type: its getter would have to encode an untyped value back to JavaScript, which isn't supported. Use a concrete type, or 'JavaScriptValue' to expose a JS value directly.",
-  id: "js-free-form-property",
-  severity: .error
-)
+private func freeFormPropertyError(for freeFormType: String) -> JSDiagnosticMessage {
+  return JSDiagnosticMessage(
+    "A @JS property can't have the free-form '\(freeFormType)': its getter would have to encode an untyped value back to JavaScript, which isn't supported. \(suggestedAlternative(for: freeFormType))",
+    id: "js-free-form-property",
+    severity: .error
+  )
+}
 
 private struct JSDiagnosticMessage: DiagnosticMessage {
   let message: String
