@@ -27,8 +27,8 @@ internal struct JSConstructor {
 
     var callArguments: [String] = []
     for (index, parameter) in parameters.enumerated() {
-      let exprType = expressionType(parameter.type.trimmedDescription)
-      lines.append("let arg\(index) = try \(exprType).decode(arguments.unownedValue(at: \(index)), in: runtime)")
+      let type = parameter.type.trimmedDescription
+      lines.append("let arg\(index) = try \(decodeCall(type, from: "arguments.unownedValue(at: \(index))"))")
 
       let label = parameter.firstName.text
       callArguments.append(label == "_" ? "arg\(index)" : "\(label): arg\(index)")

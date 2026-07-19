@@ -1,3 +1,4 @@
+import SwiftDiagnostics
 import SwiftSyntax
 import SwiftSyntaxMacros
 
@@ -30,6 +31,8 @@ public struct JSMacro: PeerMacro {
     providingPeersOf declaration: some DeclSyntaxProtocol,
     in context: some MacroExpansionContext
   ) throws -> [DeclSyntax] {
+    diagnoseFreeFormTypes(in: declaration, in: context)
+
     guard let member = boundaryMember(of: declaration),
       let assertion = directionalConformanceAssertion(
         name: member.name,
@@ -40,6 +43,115 @@ public struct JSMacro: PeerMacro {
       return []
     }
     return [assertion]
+  }
+}
+
+/// Emits the free-form (`Any` / `[Any]` / `[String: Any]`) diagnostics for a `@JS` declaration.
+///
+/// A free-form type is only supported crossing the boundary as an **argument**, decoded through
+/// `JavaScriptValue.decodeAny…`; there is no free-form encode, so any position that encodes is a hard
+/// error. That means:
+/// - a function/constructor **parameter** typed free-form gets a warning steering to
+///   `[String: JavaScriptValue]` (the type-safe alternative), but compiles;
+/// - a function **return** typed free-form is an error (it would need to encode);
+/// - a **property** typed free-form is an error regardless of settability, because its getter always
+///   encodes.
+///
+/// Types are matched by their written spelling on the type node, so the diagnostic points at the
+/// offending type in the user's source.
+private func diagnoseFreeFormTypes(
+  in declaration: some DeclSyntaxProtocol,
+  in context: some MacroExpansionContext
+) {
+  if let funcDecl = declaration.as(FunctionDeclSyntax.self) {
+    warnFreeFormArguments(funcDecl.signature.parameterClause.parameters, in: context)
+    if let returnType = funcDecl.signature.returnClause?.type,
+      isFreeFormBoundaryType(returnType.trimmedDescription) {
+      context.diagnose(
+        Diagnostic(node: returnType, message: freeFormReturnError(for: returnType.trimmedDescription)))
+    }
+    return
+  }
+
+  // A constructor decodes its arguments exactly like a function; it has no return value to encode, so
+  // only the argument warning applies.
+  if let initDecl = declaration.as(InitializerDeclSyntax.self) {
+    warnFreeFormArguments(initDecl.signature.parameterClause.parameters, in: context)
+    return
+  }
+
+  if let varDecl = declaration.as(VariableDeclSyntax.self),
+    let type = varDecl.bindings.first?.typeAnnotation?.type,
+    isFreeFormBoundaryType(type.trimmedDescription) {
+    context.diagnose(
+      Diagnostic(node: type, message: freeFormPropertyError(for: type.trimmedDescription)))
+  }
+}
+
+/// The tail of a free-form encode error: the reshaped `JavaScriptValue` alternative when the type is a
+/// container (`[String: Any]` -> `[String: JavaScriptValue]`), otherwise the passthrough suggestion
+/// for a bare `Any`. Both conform to the codable protocols, so either is a valid fix.
+private func suggestedAlternative(for freeFormType: String) -> String {
+  if let reshaped = typedFreeFormReplacement(for: freeFormType), reshaped != "JavaScriptValue" {
+    return "Use '\(reshaped)', or 'JavaScriptValue' to pass a JS value through unchanged."
+  }
+  return "Use a concrete type, or 'JavaScriptValue' to pass a JS value through unchanged."
+}
+
+/// Emits the steering warning for each free-form parameter in a list. Shared by the function and
+/// constructor cases, which both decode their arguments through the same path.
+private func warnFreeFormArguments(
+  _ parameters: FunctionParameterListSyntax,
+  in context: some MacroExpansionContext
+) {
+  for parameter in parameters {
+    let type = parameter.type.trimmedDescription
+    guard let suggested = typedFreeFormReplacement(for: type) else {
+      continue
+    }
+    context.diagnose(
+      Diagnostic(
+        node: parameter.type,
+        message: freeFormArgumentWarning(for: type, suggesting: suggested)))
+  }
+}
+
+private func freeFormArgumentWarning(
+  for freeFormType: String,
+  suggesting suggestedType: String
+) -> JSDiagnosticMessage {
+  return JSDiagnosticMessage(
+    "Prefer '\(suggestedType)' over the free-form '\(freeFormType)' for a @JS argument. Free-form decoding boxes every value as 'Any' (slower, no static typing); the 'JavaScriptValue' element keeps each value inspectable without erasing it.",
+    id: "js-free-form-argument",
+    severity: .warning
+  )
+}
+
+private func freeFormReturnError(for freeFormType: String) -> JSDiagnosticMessage {
+  return JSDiagnosticMessage(
+    "A @JS function can't return the free-form '\(freeFormType)': there's no way to encode an untyped value back to JavaScript. \(suggestedAlternative(for: freeFormType))",
+    id: "js-free-form-return",
+    severity: .error
+  )
+}
+
+private func freeFormPropertyError(for freeFormType: String) -> JSDiagnosticMessage {
+  return JSDiagnosticMessage(
+    "A @JS property can't have the free-form '\(freeFormType)': its getter would have to encode an untyped value back to JavaScript, which isn't supported. \(suggestedAlternative(for: freeFormType))",
+    id: "js-free-form-property",
+    severity: .error
+  )
+}
+
+private struct JSDiagnosticMessage: DiagnosticMessage {
+  let message: String
+  let diagnosticID: MessageID
+  let severity: DiagnosticSeverity
+
+  init(_ message: String, id: String, severity: DiagnosticSeverity) {
+    self.message = message
+    self.diagnosticID = MessageID(domain: "ExpoModulesMacros", id: id)
+    self.severity = severity
   }
 }
 

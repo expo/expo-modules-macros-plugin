@@ -261,6 +261,18 @@ internal func expressionType(_ type: String) -> String {
   return type.dropLast() + "?"
 }
 
+/// The decode expression for a boundary type read from `valueExpression` (a `JavaScriptUnownedValue`),
+/// as it appears after `try`. A free-form type (`Any`, `[Any]`, `[String: Any]`) can't conform to
+/// `JavaScriptDecodable`, so it decodes through the dedicated `JavaScriptValue.decodeAny…` entry point
+/// keyed to its shape; every other type decodes through its own static `decode`, spelled in expression
+/// position (`T!` rewritten to `T?`).
+internal func decodeCall(_ type: String, from valueExpression: String) -> String {
+  if let method = freeFormDecodeMethod(for: type) {
+    return "JavaScriptValue.\(method)(\(valueExpression), in: runtime)"
+  }
+  return "\(expressionType(type)).decode(\(valueExpression), in: runtime)"
+}
+
 // MARK: - @JS property collection
 
 /// Collects the `@JS var` bindings of a declaration into `JSProperty` values for direct JSI binding.
