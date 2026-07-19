@@ -98,13 +98,18 @@ private func warnFreeFormArguments(
       continue
     }
     context.diagnose(
-      Diagnostic(node: parameter.type, message: freeFormArgumentWarning(suggesting: suggested)))
+      Diagnostic(
+        node: parameter.type,
+        message: freeFormArgumentWarning(for: type, suggesting: suggested)))
   }
 }
 
-private func freeFormArgumentWarning(suggesting suggestedType: String) -> JSDiagnosticMessage {
+private func freeFormArgumentWarning(
+  for freeFormType: String,
+  suggesting suggestedType: String
+) -> JSDiagnosticMessage {
   return JSDiagnosticMessage(
-    "Prefer '\(suggestedType)' over a free-form 'Any' type for a @JS argument. Free-form decoding boxes every value as 'Any' (slower, no static typing); the 'JavaScriptValue' element keeps each value inspectable without erasing it.",
+    "Prefer '\(suggestedType)' over the free-form '\(freeFormType)' for a @JS argument. Free-form decoding boxes every value as 'Any' (slower, no static typing); the 'JavaScriptValue' element keeps each value inspectable without erasing it.",
     id: "js-free-form-argument",
     severity: .warning
   )
