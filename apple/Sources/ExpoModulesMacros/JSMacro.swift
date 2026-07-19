@@ -92,16 +92,23 @@ private func warnFreeFormArguments(
   _ parameters: FunctionParameterListSyntax,
   in context: some MacroExpansionContext
 ) {
-  for parameter in parameters where isFreeFormBoundaryType(parameter.type.trimmedDescription) {
-    context.diagnose(Diagnostic(node: parameter.type, message: freeFormArgumentWarning))
+  for parameter in parameters {
+    let type = parameter.type.trimmedDescription
+    guard let suggested = typedFreeFormReplacement(for: type) else {
+      continue
+    }
+    context.diagnose(
+      Diagnostic(node: parameter.type, message: freeFormArgumentWarning(suggesting: suggested)))
   }
 }
 
-private let freeFormArgumentWarning = JSDiagnosticMessage(
-  "Prefer '[String: JavaScriptValue]' over a free-form 'Any' type for a @JS argument. Free-form decoding boxes every value as 'Any' (slower, no static typing); a typed 'JavaScriptValue' keeps the value inspectable without erasing it.",
-  id: "js-free-form-argument",
-  severity: .warning
-)
+private func freeFormArgumentWarning(suggesting suggestedType: String) -> JSDiagnosticMessage {
+  return JSDiagnosticMessage(
+    "Prefer '\(suggestedType)' over a free-form 'Any' type for a @JS argument. Free-form decoding boxes every value as 'Any' (slower, no static typing); the 'JavaScriptValue' element keeps each value inspectable without erasing it.",
+    id: "js-free-form-argument",
+    severity: .warning
+  )
+}
 
 private let freeFormReturnError = JSDiagnosticMessage(
   "A @JS function can't return a free-form 'Any' type: there's no way to encode an untyped value back to JavaScript. Return a concrete type, or 'JavaScriptValue' to pass a JS value through unchanged.",

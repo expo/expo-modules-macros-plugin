@@ -48,6 +48,15 @@ private let freeFormDecodeMethods: [String: String] = [
   "[String:Any]": "decodeAnyDictionary",
 ]
 
+/// The type-safe alternative a free-form type's warning steers to: the same shape with the `Any`
+/// element replaced by `JavaScriptValue`, which conforms to the codable protocols. Keyed by the
+/// free-form type's normalized spelling; spelled with conventional spacing for the message.
+private let typedFreeFormReplacements: [String: String] = [
+  "Any": "JavaScriptValue",
+  "[Any]": "[JavaScriptValue]",
+  "[String:Any]": "[String: JavaScriptValue]",
+]
+
 /// True when a boundary type (as written) is one of the free-form spellings, ignoring internal
 /// whitespace so `[String: Any]` and `[String :Any]` both match. Optionals are not free-form here: a
 /// trailing `?` would route through `Optional.decode`, which free-form can't satisfy, so an optional
@@ -61,6 +70,12 @@ internal func isFreeFormBoundaryType(_ type: String) -> Bool {
 /// place of the type's own `.decode`.
 internal func freeFormDecodeMethod(for type: String) -> String? {
   return freeFormDecodeMethods[normalizedTypeSpelling(type)]
+}
+
+/// The type-safe alternative to suggest in place of a free-form type (its `Any` element replaced by
+/// `JavaScriptValue`), or `nil` when the type isn't free-form.
+internal func typedFreeFormReplacement(for type: String) -> String? {
+  return typedFreeFormReplacements[normalizedTypeSpelling(type)]
 }
 
 /// A type spelling with all whitespace removed, so spelling variations of the same type
