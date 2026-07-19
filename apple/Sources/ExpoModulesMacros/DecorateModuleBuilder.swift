@@ -166,8 +166,8 @@ internal struct JSFunction {
   /// primitive's `decode` is `@inlinable` and lowers to the same direct accessor a hand-rolled fast
   /// path would use.
   private func decodeStatement(at index: Int) -> String {
-    let exprType = expressionType(parameters[index].type.trimmedDescription)
-    return "let arg\(index) = try \(exprType).decode(arguments.unownedValue(at: \(index)), in: runtime)"
+    let type = parameters[index].type.trimmedDescription
+    return "let arg\(index) = try \(decodeCall(type, from: "arguments.unownedValue(at: \(index))"))"
   }
 
   /// The `<callee>.<name>(...)` call for the given arity. Slots `0..<arity` are passed their decoded
@@ -332,8 +332,7 @@ internal struct JSProperty {
     // getter-only (a settable var with neither an annotation nor a literal default is rare and can't
     // be decoded).
     if isSettable, let valueType {
-      let exprType = expressionType(valueType)
-      let setDecode = "\(callee).\(swiftName) = try \(exprType).decode(arguments.unownedValue(at: 0), in: runtime)"
+      let setDecode = "\(callee).\(swiftName) = try \(decodeCall(valueType, from: "arguments.unownedValue(at: 0)"))"
       lines.append(
         accessorClosure(
           descriptorName, "set", receiver: receiver, body: "\(unwrap)\(setDecode)\nreturn .undefined"))

@@ -30,6 +30,45 @@ internal let eventEmitterProtocolName = "EventEmitter"
 /// them would only add noise to the expansion.
 private let knownConformingPrimitives: Set<String> = ["Bool", "Int", "Double", "String"]
 
+/// The free-form boundary types: an untyped value (`Any`), an untyped array (`[Any]`), and an
+/// untyped string-keyed dictionary (`[String: Any]`). None of these can conform to the JS codable
+/// protocols (`Any` can't conform to a protocol, and the container conditional conformances require
+/// the element/value to conform), so they're never asserted; instead the binding decodes them through
+/// a dedicated `JavaScriptValue.decodeAny…` entry point. They're accepted **only** in decode position
+/// (function/constructor arguments); a free-form return or getter is rejected, since there's no
+/// free-form encode. Recognized by their whitespace-normalized spelling so `[String: Any]` and
+/// `[String : Any]` both match.
+private let freeFormBoundaryTypes: Set<String> = ["Any", "[Any]", "[String:Any]"]
+
+/// The `JavaScriptValue.decodeAny…` method the binding calls to decode a free-form argument, keyed by
+/// the free-form type's normalized spelling. `nil` for any non-free-form type.
+private let freeFormDecodeMethods: [String: String] = [
+  "Any": "decodeAny",
+  "[Any]": "decodeAnyArray",
+  "[String:Any]": "decodeAnyDictionary",
+]
+
+/// True when a boundary type (as written) is one of the free-form spellings, ignoring internal
+/// whitespace so `[String: Any]` and `[String :Any]` both match. Optionals are not free-form here: a
+/// trailing `?` would route through `Optional.decode`, which free-form can't satisfy, so an optional
+/// free-form type isn't recognized and stays a normal (failing) assertion.
+internal func isFreeFormBoundaryType(_ type: String) -> Bool {
+  return freeFormBoundaryTypes.contains(normalizedTypeSpelling(type))
+}
+
+/// The `JavaScriptValue.decodeAny…` method name for a free-form boundary type, or `nil` when the type
+/// isn't free-form. The binding emits `JavaScriptValue.<method>(arguments.unownedValue(at:), in:)` in
+/// place of the type's own `.decode`.
+internal func freeFormDecodeMethod(for type: String) -> String? {
+  return freeFormDecodeMethods[normalizedTypeSpelling(type)]
+}
+
+/// A type spelling with all whitespace removed, so spelling variations of the same type
+/// (`[String: Any]` vs `[String :Any]`) compare equal.
+private func normalizedTypeSpelling(_ type: String) -> String {
+  return type.filter { !$0.isWhitespace }
+}
+
 /// One member's worth of conformance assertion: a name (the member it stands for) and the declared
 /// types crossing the JS boundary for it. The name surfaces verbatim in the compiler's conformance
 /// diagnostic ("local function '<name>' requires that '<Type>' conform to …"), so it identifies the
@@ -122,7 +161,10 @@ internal func typeConformanceAssertions(
 /// than reusing the whole body fragment below.
 internal func assertableBoundaryType(_ type: String) -> String? {
   let unwrapped = unwrappedOptional(type)
-  return knownConformingPrimitives.contains(unwrapped) ? nil : unwrapped
+  guard !knownConformingPrimitives.contains(unwrapped), !isFreeFormBoundaryType(unwrapped) else {
+    return nil
+  }
+  return unwrapped
 }
 
 /// The assertion's body fragment: a nested generic helper named after the member, plus one call per
@@ -145,13 +187,15 @@ private func conformanceAssertionBody(
 }
 
 /// Normalizes a list of boundary types for assertion: unwraps each to its core type (trailing
-/// optionals stripped), drops the known-conforming primitives that never need asserting, and dedups
-/// while preserving first-seen order so a type is asserted once even when it appears more than once.
+/// optionals stripped), drops the known-conforming primitives and the free-form types (neither needs
+/// nor can satisfy an assertion), and dedups while preserving first-seen order so a type is asserted
+/// once even when it appears more than once.
 private func distinctAssertableTypes(_ types: [String]) -> [String] {
   var seen: Set<String> = []
   var distinct: [String] = []
   for type in types.map(unwrappedOptional)
-  where !knownConformingPrimitives.contains(type) && seen.insert(type).inserted {
+  where !knownConformingPrimitives.contains(type) && !isFreeFormBoundaryType(type)
+    && seen.insert(type).inserted {
     distinct.append(type)
   }
   return distinct

@@ -1,3 +1,4 @@
+import SwiftDiagnostics
 import SwiftSyntax
 import SwiftSyntaxMacros
 
@@ -30,6 +31,8 @@ public struct JSMacro: PeerMacro {
     providingPeersOf declaration: some DeclSyntaxProtocol,
     in context: some MacroExpansionContext
   ) throws -> [DeclSyntax] {
+    diagnoseFreeFormTypes(in: declaration, in: context)
+
     guard let member = boundaryMember(of: declaration),
       let assertion = directionalConformanceAssertion(
         name: member.name,
@@ -40,6 +43,87 @@ public struct JSMacro: PeerMacro {
       return []
     }
     return [assertion]
+  }
+}
+
+/// Emits the free-form (`Any` / `[Any]` / `[String: Any]`) diagnostics for a `@JS` declaration.
+///
+/// A free-form type is only supported crossing the boundary as an **argument**, decoded through
+/// `JavaScriptValue.decodeAny…`; there is no free-form encode, so any position that encodes is a hard
+/// error. That means:
+/// - a function/constructor **parameter** typed free-form gets a warning steering to
+///   `[String: JavaScriptValue]` (the type-safe alternative), but compiles;
+/// - a function **return** typed free-form is an error (it would need to encode);
+/// - a **property** typed free-form is an error regardless of settability, because its getter always
+///   encodes.
+///
+/// Types are matched by their written spelling on the type node, so the diagnostic points at the
+/// offending type in the user's source.
+private func diagnoseFreeFormTypes(
+  in declaration: some DeclSyntaxProtocol,
+  in context: some MacroExpansionContext
+) {
+  if let funcDecl = declaration.as(FunctionDeclSyntax.self) {
+    warnFreeFormArguments(funcDecl.signature.parameterClause.parameters, in: context)
+    if let returnType = funcDecl.signature.returnClause?.type,
+      isFreeFormBoundaryType(returnType.trimmedDescription) {
+      context.diagnose(Diagnostic(node: returnType, message: freeFormReturnError))
+    }
+    return
+  }
+
+  // A constructor decodes its arguments exactly like a function; it has no return value to encode, so
+  // only the argument warning applies.
+  if let initDecl = declaration.as(InitializerDeclSyntax.self) {
+    warnFreeFormArguments(initDecl.signature.parameterClause.parameters, in: context)
+    return
+  }
+
+  if let varDecl = declaration.as(VariableDeclSyntax.self),
+    let type = varDecl.bindings.first?.typeAnnotation?.type,
+    isFreeFormBoundaryType(type.trimmedDescription) {
+    context.diagnose(Diagnostic(node: type, message: freeFormPropertyError))
+  }
+}
+
+/// Emits the steering warning for each free-form parameter in a list. Shared by the function and
+/// constructor cases, which both decode their arguments through the same path.
+private func warnFreeFormArguments(
+  _ parameters: FunctionParameterListSyntax,
+  in context: some MacroExpansionContext
+) {
+  for parameter in parameters where isFreeFormBoundaryType(parameter.type.trimmedDescription) {
+    context.diagnose(Diagnostic(node: parameter.type, message: freeFormArgumentWarning))
+  }
+}
+
+private let freeFormArgumentWarning = JSDiagnosticMessage(
+  "Prefer '[String: JavaScriptValue]' over a free-form 'Any' type for a @JS argument. Free-form decoding boxes every value as 'Any' (slower, no static typing); a typed 'JavaScriptValue' keeps the value inspectable without erasing it.",
+  id: "js-free-form-argument",
+  severity: .warning
+)
+
+private let freeFormReturnError = JSDiagnosticMessage(
+  "A @JS function can't return a free-form 'Any' type: there's no way to encode an untyped value back to JavaScript. Return a concrete type, or 'JavaScriptValue' to pass a JS value through unchanged.",
+  id: "js-free-form-return",
+  severity: .error
+)
+
+private let freeFormPropertyError = JSDiagnosticMessage(
+  "A @JS property can't have a free-form 'Any' type: its getter would have to encode an untyped value back to JavaScript, which isn't supported. Use a concrete type, or 'JavaScriptValue' to expose a JS value directly.",
+  id: "js-free-form-property",
+  severity: .error
+)
+
+private struct JSDiagnosticMessage: DiagnosticMessage {
+  let message: String
+  let diagnosticID: MessageID
+  let severity: DiagnosticSeverity
+
+  init(_ message: String, id: String, severity: DiagnosticSeverity) {
+    self.message = message
+    self.diagnosticID = MessageID(domain: "ExpoModulesMacros", id: id)
+    self.severity = severity
   }
 }
 

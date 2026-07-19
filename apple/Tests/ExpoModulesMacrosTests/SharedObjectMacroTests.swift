@@ -291,6 +291,48 @@ struct SharedObjectMacroTests {
   }
 
   @Test
+  func `@JS init with a free-form argument decodes through decodeAnyDictionary and warns`() {
+    assertExpansion(
+      """
+      @SharedObject
+      final class Cache: SharedObject {
+        @JS
+        init(config: [String: Any]) {}
+      }
+      """,
+      expandedSource: """
+        final class Cache: SharedObject {
+          @JavaScriptActor
+          init(config: [String: Any]) {}
+
+          public static func _synthesizedClassDefinition() -> ClassDefinition {
+            return Class("Cache", Cache.self) {
+            }
+          }
+
+          @JavaScriptActor
+          public override class func _constructSharedObject(this: JavaScriptValue, arguments: borrowing JavaScriptValuesBuffer, in runtime: JavaScriptRuntime) throws -> SharedObject? {
+            guard arguments.count == 1 else {
+              throw Exceptions.ArgumentsRangeMismatch((functionName: "Cache", received: arguments.count, required: 1, maximum: 1))
+            }
+            let arg0 = try JavaScriptValue.decodeAnyDictionary(arguments.unownedValue(at: 0), in: runtime)
+            return Cache(config: arg0)
+          }
+        }
+        """,
+      diagnostics: [
+        DiagnosticSpec(
+          message:
+            "Prefer '[String: JavaScriptValue]' over a free-form 'Any' type for a @JS argument. Free-form decoding boxes every value as 'Any' (slower, no static typing); a typed 'JavaScriptValue' keeps the value inspectable without erasing it.",
+          line: 5,
+          column: 16,
+          severity: .warning
+        )
+      ]
+    )
+  }
+
+  @Test
   func `Mixed members: init constructs, method and property decorate`() {
     assertExpansion(
       """
