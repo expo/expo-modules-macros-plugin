@@ -1297,6 +1297,57 @@ struct ExpoModuleMacroTests {
   }
 
   @Test
+  func `Optional free-form argument isn't rerouted: it's asserted (and fails) like any non-conforming type`() {
+    // `[String: Any]?` isn't rerouted (only exact free-form is), so it decodes through
+    // `Optional.decode` and gets a normal conformance-assertion peer that fails cleanly, rather than
+    // a warning.
+    assertExpansion(
+      """
+      @ExpoModule
+      final class MyModule: Module {
+        @JS
+        func keep(config: [String: Any]?) { }
+      }
+      """,
+      expandedSource: """
+        final class MyModule: Module {
+          @JavaScriptActor
+          func keep(config: [String: Any]?) { }
+
+          private func _assertTypesConformance_keep() {
+            func keep<A0: JavaScriptDecodable>(_: A0.Type) {
+            }
+            keep([String: Any].self)
+          }
+
+          public static let _jsName = "MyModule"
+
+          public func _synthesizedDefinition() -> [AnyDefinition] {
+            return []
+          }
+
+          @JavaScriptActor
+          public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime) throws {
+            object.setProperty("keep") { [self] (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
+              guard arguments.count >= 0 && arguments.count <= 1 else {
+                throw Exceptions.ArgumentsRangeMismatch((functionName: "keep", received: arguments.count, required: 0, maximum: 1))
+              }
+              switch arguments.count {
+              case 0:
+                self.keep(config: nil)
+              default:
+                let arg0 = try [String: Any]?.decode(arguments.unownedValue(at: 0), in: runtime)
+                self.keep(config: arg0)
+              }
+              return .undefined
+            }
+          }
+        }
+        """
+    )
+  }
+
+  @Test
   func `Free-form array and bare Any arguments each reroute to their decodeAny entry point and warn`() {
     assertExpansion(
       """

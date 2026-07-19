@@ -116,16 +116,17 @@ internal func typeConformanceAssertions(
     """
 }
 
-/// The type to assert for a boundary type as written: trailing optional markers are unwrapped to the
-/// core type, and a known-conforming primitive returns `nil` (nothing to assert). Shared with
-/// `@Event`, which folds its single payload type into a combined assertion of its own shape rather
-/// than reusing the whole body fragment below.
+/// The type to assert for a boundary type as written, or `nil` when nothing needs asserting: an
+/// exactly-free-form type (handled by the binding's `decodeAny…` reroute) and a known-conforming
+/// primitive both return `nil`; everything else is unwrapped of trailing optionals and asserted. An
+/// *optional* free-form (`[String: Any]?`) isn't rerouted and doesn't conform, so it's kept and
+/// asserted for a clean diagnostic. Shared with `@Event`.
 internal func assertableBoundaryType(_ type: String) -> String? {
-  let unwrapped = unwrappedOptional(type)
-  guard !knownConformingPrimitives.contains(unwrapped), !isFreeFormBoundaryType(unwrapped) else {
+  guard !isFreeFormBoundaryType(type) else {
     return nil
   }
-  return unwrapped
+  let unwrapped = unwrappedOptional(type)
+  return knownConformingPrimitives.contains(unwrapped) ? nil : unwrapped
 }
 
 /// The assertion's body fragment: a nested generic helper named after the member, plus one call per
@@ -147,16 +148,12 @@ private func conformanceAssertionBody(
   return lines.joined(separator: "\n")
 }
 
-/// Normalizes a list of boundary types for assertion: unwraps each to its core type (trailing
-/// optionals stripped), drops the known-conforming primitives and the free-form types (neither needs
-/// nor can satisfy an assertion), and dedups while preserving first-seen order so a type is asserted
-/// once even when it appears more than once.
+/// The distinct types to assert from a list, mapping each through `assertableBoundaryType` (which
+/// drops what needs no assertion) and deduping in first-seen order.
 private func distinctAssertableTypes(_ types: [String]) -> [String] {
   var seen: Set<String> = []
   var distinct: [String] = []
-  for type in types.map(unwrappedOptional)
-  where !knownConformingPrimitives.contains(type) && !isFreeFormBoundaryType(type)
-    && seen.insert(type).inserted {
+  for type in types.compactMap(assertableBoundaryType) where seen.insert(type).inserted {
     distinct.append(type)
   }
   return distinct
