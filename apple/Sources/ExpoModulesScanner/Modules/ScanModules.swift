@@ -40,14 +40,26 @@ struct ScannedModule: Codable, Equatable {
   /// and the consumer never has to apply the fallback itself.
   let jsName: String
 
+  /// The class's spelled access modifier (`open`, `public`, `package`, `fileprivate`, `private`),
+  /// or `internal` when none is written. The generated modules provider references the class from
+  /// the app target, which requires `public`/`open`, so the consumer uses this to skip inaccessible
+  /// classes with a diagnostic instead of emitting a provider that fails to compile.
+  let accessLevel: String
+
   /// Source file the module was found in, relative to the path the scanner was invoked with.
   let file: String
 }
+
+/// Version of the `scan-modules` output shape. Bumped on any breaking change to the envelope or to
+/// `ScannedModule`, so `expo-modules-autolinking` can verify it understands the output before
+/// trusting it (and fall back to config-declared modules when it doesn't).
+let scanModulesSchemaVersion = 1
 
 /// The `scan-modules` result: the detected modules plus the stats describing the run. Encoded as the
 /// command's JSON output. (`scan-exports` returns its own `ScanExportsResult` shape; the two commands
 /// serve different consumers and don't share an envelope.)
 struct ScanModulesResult: Codable, Equatable {
+  let schemaVersion: Int
   let modules: [ScannedModule]
   let stats: ScanStats
 }
@@ -61,8 +73,8 @@ func scanModules(paths: [String]) -> ScanModulesResult {
   let modules = scan.detections.map {
     // Resolve the JS name the way the macro does: explicit `@ExpoModule("Foo")` override, else the
     // class name.
-    ScannedModule(name: $0.name, jsName: $0.jsName ?? $0.name, file: $0.file)
+    ScannedModule(name: $0.name, jsName: $0.jsName ?? $0.name, accessLevel: $0.accessLevel, file: $0.file)
   }
 
-  return ScanModulesResult(modules: modules, stats: scan.stats)
+  return ScanModulesResult(schemaVersion: scanModulesSchemaVersion, modules: modules, stats: scan.stats)
 }

@@ -82,6 +82,35 @@ struct DetectionVisitorTests {
     #expect(detections.first?.arguments.isEmpty == true)
   }
 
+  @Test(arguments: [
+    ("open", "open"),
+    ("public", "public"),
+    ("package", "package"),
+    ("internal", "internal"),
+    ("fileprivate", "fileprivate"),
+    ("private", "private"),
+  ])
+  func `Records the spelled access level`(modifier: String, expected: String) {
+    let detections = detect(
+      """
+      @ExpoModule
+      \(modifier) final class GreeterModule {}
+      """
+    )
+    #expect(detections.first?.accessLevel == expected)
+  }
+
+  @Test
+  func `Defaults the access level to internal when none is spelled`() {
+    let detections = detect(
+      """
+      @ExpoModule
+      final class GreeterModule {}
+      """
+    )
+    #expect(detections.first?.accessLevel == "internal")
+  }
+
   @Test
   func `Ignores @JS members nested in a type body`() {
     let detections = detect(
@@ -264,6 +293,7 @@ struct ScanTests {
       #expect(result.modules.map(\.name) == ["MyModule"])
       // Reported paths are absolute.
       #expect(result.modules.first?.file.hasPrefix("/") == true)
+      #expect(result.schemaVersion == scanModulesSchemaVersion)
       // All three .swift files are read; only the one mentioning a macro is parsed.
       #expect(result.stats.filesScanned == 3)
       #expect(result.stats.filesParsed == 1)
@@ -307,17 +337,30 @@ struct ScanTests {
   }
 
   @Test
-  func `Prunes .build, Pods, and .git directories`() throws {
+  func `Prunes .build, Pods, .git, and node_modules directories`() throws {
     try withTree([
       ("Real.swift", "@ExpoModule\nfinal class RealModule {}"),
       (".build/Generated.swift", "@ExpoModule\nfinal class BuildArtifact {}"),
       ("Pods/Vendored.swift", "@ExpoModule\nfinal class Vendored {}"),
       (".git/hooks/Sneaky.swift", "@ExpoModule\nfinal class Sneaky {}"),
+      ("node_modules/some-dep/ios/Nested.swift", "@ExpoModule\nfinal class Nested {}"),
     ]) { result in
       // Only the file outside the pruned directories is seen at all.
       #expect(result.modules.map(\.name) == ["RealModule"])
       #expect(result.stats.filesScanned == 1)
       #expect(result.stats.filesParsed == 1)
+    }
+  }
+
+  @Test
+  func `Maps the access level into the output`() throws {
+    try withTree([
+      ("Public.swift", "@ExpoModule\npublic final class PublicModule {}"),
+      ("Unspelled.swift", "@ExpoModule\nfinal class UnspelledModule {}"),
+    ]) { result in
+      let byName = Dictionary(uniqueKeysWithValues: result.modules.map { ($0.name, $0.accessLevel) })
+      #expect(byName["PublicModule"] == "public")
+      #expect(byName["UnspelledModule"] == "internal")
     }
   }
 }
