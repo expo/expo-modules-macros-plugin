@@ -25,4 +25,15 @@ struct ScannerCLITests {
   func `An unknown subcommand is a usage error`() {
     #expect(ScannerCLI.run(arguments: ["scan-everything", "/tmp"]) == 2)
   }
+
+  @Test(arguments: [["scan-modules", "--platform"], ["scan-modules", "/tmp", "--define"]])
+  func `An option without its value is a usage error`(arguments: [String]) {
+    #expect(ScannerCLI.run(arguments: arguments) == 2)
+  }
+
+  @Test
+  func `scan-exports rejects the scan-modules options`() {
+    #expect(ScannerCLI.run(arguments: ["scan-exports", "--platform", "iOS", "/tmp"]) == 2)
+    #expect(ScannerCLI.run(arguments: ["scan-exports", "--define", "DEBUG", "/tmp"]) == 2)
+  }
 }

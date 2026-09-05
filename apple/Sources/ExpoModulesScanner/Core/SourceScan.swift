@@ -44,23 +44,36 @@ func scanFiles(
 }
 
 /// Walks `paths`, parses each `.swift` file that might contain one of `macros`, and returns every
-/// detection (in file then source order) with the run's stats — the shape `scan-modules` projects.
-/// A thin layer over `scanFiles` that accumulates the per-file detections.
-func collectDetections(paths: [String], macros: Set<DetectedMacro>) -> (detections: [Detection], stats: ScanStats) {
+/// detection (in file then source order) with the accumulated `#if` warnings and the run's stats —
+/// the shape `scan-modules` projects. A thin layer over `scanFiles` that accumulates the per-file
+/// results.
+func collectDetections(
+  paths: [String],
+  macros: Set<DetectedMacro>,
+  configuration: ScanBuildConfiguration = .init(platform: nil, defines: [])
+) -> (detections: [Detection], warnings: [ScanWarning], stats: ScanStats) {
   var detections: [Detection] = []
+  var warnings: [ScanWarning] = []
   let stats = scanFiles(paths: paths, macros: macros) { source, file in
-    detections.append(contentsOf: detect(source: source, file: file, macros: macros))
+    let result = detect(source: source, file: file, macros: macros, configuration: configuration)
+    detections.append(contentsOf: result.detections)
+    warnings.append(contentsOf: result.warnings)
   }
-  return (detections, stats)
+  return (detections, warnings, stats)
 }
 
-/// Parses one source string and returns its detections for the given macro set. The unit of work the
-/// tests exercise.
-func detect(source: String, file: String, macros: Set<DetectedMacro>) -> [Detection] {
+/// Parses one source string and returns its detections for the given macro set, plus the warnings
+/// for `#if` conditions the configuration couldn't answer. The unit of work the tests exercise.
+func detect(
+  source: String,
+  file: String,
+  macros: Set<DetectedMacro>,
+  configuration: ScanBuildConfiguration
+) -> (detections: [Detection], warnings: [ScanWarning]) {
   let tree = Parser.parse(source: source)
-  let visitor = DetectionVisitor(file: file, tree: tree, detectedMacros: macros)
+  let visitor = DetectionVisitor(file: file, tree: tree, detectedMacros: macros, configuration: configuration)
   visitor.walk(tree)
-  return visitor.detections
+  return (visitor.detections, visitor.warnings)
 }
 
 // MARK: - Pre-filter
