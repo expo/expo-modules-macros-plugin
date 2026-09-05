@@ -81,9 +81,10 @@ jobs:
         run: swift package resolve
         working-directory: apple
 
-      - name: Build release tool
-        # Runs apple/build.js: builds the release plugin binary,
-        # copies it to apple/ExpoModulesMacros-tool, and strips it.
+      - name: Build release tools
+        # Runs apple/build.js: builds the release plugin and scanner binaries,
+        # copies them to apple/ExpoModulesMacros-tool and apple/ExpoModulesScanner,
+        # and strips them.
         run: npm run build
 
       - name: Publish

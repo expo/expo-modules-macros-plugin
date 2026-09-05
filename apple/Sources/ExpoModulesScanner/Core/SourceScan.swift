@@ -89,8 +89,9 @@ func mightContainMacro(in source: String, prefilter: NSRegularExpression) -> Boo
 
 /// Directory names skipped during the recursive walk. These hold build products, dependencies, and
 /// git internals — never source worth scanning — and pruning them keeps the walk from descending
-/// into the bulk of a monorepo's files.
-private let prunedDirectoryNames: Set<String> = [".build", "Pods", ".git"]
+/// into the bulk of a monorepo's files. `node_modules` makes any npm package root safe to pass as a
+/// scan path: nested dependencies are separate packages and get scanned on their own.
+private let prunedDirectoryNames: Set<String> = [".build", "Pods", ".git", "node_modules"]
 
 /// Expands the given paths into the list of `.swift` files to parse: a file path passes through,
 /// a directory is enumerated recursively (skipping `prunedDirectoryNames`). Order is deterministic

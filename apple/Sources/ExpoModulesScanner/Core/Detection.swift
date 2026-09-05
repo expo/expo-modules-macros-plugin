@@ -33,6 +33,12 @@ struct Detection: Codable, Equatable {
   /// The kind of declaration the macro was attached to: `class`, `struct`, `func`, `var`, `init`, …
   let declarationKind: String
 
+  /// The declaration's spelled access modifier (`open`, `public`, `package`, `fileprivate`,
+  /// `private`), or `internal` when none is written. Consumers that reference the declaration from
+  /// another Swift module (the generated modules provider does) need `public`/`open` and can reject
+  /// the rest up front instead of failing at compile time.
+  let accessLevel: String
+
   /// The explicit JS name override when written as `@ExpoModule("Foo")` / `@JS("bar")` /
   /// `@SharedObject("Baz")`, otherwise `nil` (the name defaults to `name` at expansion time).
   let jsName: String?

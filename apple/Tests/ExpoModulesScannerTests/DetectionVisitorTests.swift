@@ -82,6 +82,35 @@ struct DetectionVisitorTests {
     #expect(detections.first?.arguments.isEmpty == true)
   }
 
+  @Test(arguments: [
+    ("open", "open"),
+    ("public", "public"),
+    ("package", "package"),
+    ("internal", "internal"),
+    ("fileprivate", "fileprivate"),
+    ("private", "private"),
+  ])
+  func `Records the spelled access level`(modifier: String, expected: String) {
+    let detections = detect(
+      """
+      @ExpoModule
+      \(modifier) final class GreeterModule {}
+      """
+    )
+    #expect(detections.first?.accessLevel == expected)
+  }
+
+  @Test
+  func `Defaults the access level to internal when none is spelled`() {
+    let detections = detect(
+      """
+      @ExpoModule
+      final class GreeterModule {}
+      """
+    )
+    #expect(detections.first?.accessLevel == "internal")
+  }
+
   @Test
   func `Ignores @JS members nested in a type body`() {
     let detections = detect(

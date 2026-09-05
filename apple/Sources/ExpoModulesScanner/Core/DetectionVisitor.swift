@@ -23,7 +23,7 @@ final class DetectionVisitor: SyntaxVisitor {
 
   override func visit(_ node: ClassDeclSyntax) -> SyntaxVisitorContinueKind {
     if isTopLevel(node) {
-      record(attributes: node.attributes, name: node.name.text, kind: "class", at: node)
+      record(attributes: node.attributes, modifiers: node.modifiers, name: node.name.text, kind: "class", at: node)
     }
     // Members live in the type body; we never report them, so there's no reason to descend.
     return .skipChildren
@@ -31,7 +31,7 @@ final class DetectionVisitor: SyntaxVisitor {
 
   override func visit(_ node: StructDeclSyntax) -> SyntaxVisitorContinueKind {
     if isTopLevel(node) {
-      record(attributes: node.attributes, name: node.name.text, kind: "struct", at: node)
+      record(attributes: node.attributes, modifiers: node.modifiers, name: node.name.text, kind: "struct", at: node)
     }
     return .skipChildren
   }
@@ -54,6 +54,7 @@ final class DetectionVisitor: SyntaxVisitor {
   /// principle carry more than one (uncommon), so each is recorded independently.
   private func record(
     attributes: AttributeListSyntax,
+    modifiers: DeclModifierListSyntax,
     name: String,
     kind: String,
     at node: some SyntaxProtocol
@@ -70,6 +71,7 @@ final class DetectionVisitor: SyntaxVisitor {
           macro: macro,
           name: name,
           declarationKind: kind,
+          accessLevel: accessLevel(of: modifiers),
           jsName: stringArgument(of: attribute),
           arguments: arguments(of: attribute),
           file: file,
@@ -79,6 +81,19 @@ final class DetectionVisitor: SyntaxVisitor {
       )
     }
   }
+}
+
+/// The spelled access modifiers, in the order Swift defines them. Other modifiers (`final`,
+/// `static`, …) are not access levels and are skipped when resolving one.
+private let accessModifierNames: Set<String> = ["open", "public", "package", "internal", "fileprivate", "private"]
+
+/// The declaration's access level: the first spelled access modifier, or Swift's default of
+/// `internal` when none is written. A declaration can spell at most one, so first is the only one.
+private func accessLevel(of modifiers: DeclModifierListSyntax) -> String {
+  for modifier in modifiers where accessModifierNames.contains(modifier.name.text) {
+    return modifier.name.text
+  }
+  return "internal"
 }
 
 /// Every argument passed to the attribute, in source order, each as a label (or `nil` when

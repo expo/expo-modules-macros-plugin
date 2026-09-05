@@ -26,7 +26,13 @@ function spawnAsync(command, args, options = {}) {
 }
 
 /**
- * Builds the macro plugin for the given architecture and returns the path to the built binary.
+ * The executables shipped in the package: the compiler macro plugin and the source scanner CLI.
+ * One `swift build` produces both; each is lipoed, stripped and verified separately below.
+ */
+const products = ['ExpoModulesMacros-tool', 'ExpoModulesScanner'];
+
+/**
+ * Builds the package for the given architecture and returns the built binary path per product.
  * SwiftPM always builds macro tools for the host architecture, so the x86_64 slice
  * is built by running the whole toolchain under Rosetta with `arch -${arch}`.
  */
@@ -38,13 +44,17 @@ async function buildForArch(arch) {
     await spawnAsync('arch', [`-${arch}`, 'swift', ...buildArgs], { cwd: __dirname });
   }
 
-  const binPath = path.join(__dirname, `.build/${arch}-apple-macosx/release/ExpoModulesMacros-tool`);
-  try {
-    await fs.access(binPath);
-  } catch {
-    throw new Error(`Could not find the built ExpoModulesMacros-tool at ${binPath}`);
+  const binPaths = {};
+  for (const product of products) {
+    const binPath = path.join(__dirname, `.build/${arch}-apple-macosx/release/${product}`);
+    try {
+      await fs.access(binPath);
+    } catch {
+      throw new Error(`Could not find the built ${product} at ${binPath}`);
+    }
+    binPaths[product] = binPath;
   }
-  return binPath;
+  return binPaths;
 }
 
 /**
@@ -100,14 +110,12 @@ async function verifyArchs(binaryPath, archs) {
 }
 
 async function main() {
-  const outputPath = path.join(__dirname, 'ExpoModulesMacros-tool');
-
   const archs = [];
   for (const arch of ['arm64', 'x86_64']) {
     if (await canBuildForArch(arch)) {
       archs.push(arch);
     } else {
-      console.warn(`The Swift toolchain cannot run for ${arch} - the built binary will not support ${arch} Macs.`);
+      console.warn(`The Swift toolchain cannot run for ${arch} - the built binaries will not support ${arch} Macs.`);
     }
   }
   if (archs.length === 0) {
@@ -115,21 +123,26 @@ async function main() {
   }
 
   // Builds run sequentially as SwiftPM locks the shared .build directory.
-  const binPaths = [];
+  const binPathsPerArch = [];
   for (const arch of archs) {
-    binPaths.push(await buildForArch(arch));
+    binPathsPerArch.push(await buildForArch(arch));
   }
 
-  await fs.rm(outputPath, { force: true });
-  if (binPaths.length > 1) {
-    await spawnAsync('lipo', ['-create', ...binPaths, '-output', outputPath]);
-  } else {
-    await fs.copyFile(binPaths[0], outputPath);
-  }
+  for (const product of products) {
+    const outputPath = path.join(__dirname, product);
+    const binPaths = binPathsPerArch.map((binPathsForArch) => binPathsForArch[product]);
 
-  await spawnAsync('strip', [outputPath]);
-  await verifyArchs(outputPath, archs);
-  await spawnAsync('lipo', ['-info', outputPath]);
+    await fs.rm(outputPath, { force: true });
+    if (binPaths.length > 1) {
+      await spawnAsync('lipo', ['-create', ...binPaths, '-output', outputPath]);
+    } else {
+      await fs.copyFile(binPaths[0], outputPath);
+    }
+
+    await spawnAsync('strip', [outputPath]);
+    await verifyArchs(outputPath, archs);
+    await spawnAsync('lipo', ['-info', outputPath]);
+  }
 }
 
 main().catch((error) => {
