@@ -351,15 +351,54 @@ struct IfConfigTests {
   func `A condition the scan can't answer skips the region and warns`() {
     let visitor = visit(
       """
-      #if canImport(UIKit)
+      #if canImport(SomeVendoredSDK)
       @ExpoModule
-      final class UIKitModule {}
+      final class VendoredModule {}
       #endif
       """,
       platform: "iOS"
     )
     #expect(visitor.detections.isEmpty)
-    #expect(visitor.warnings.first?.message.contains("canImport(UIKit)") == true)
+    #expect(visitor.warnings.first?.message.contains("canImport(SomeVendoredSDK)") == true)
+  }
+
+  @Test
+  func `Answers canImport of a curated SDK framework from the platform`() {
+    let source = """
+      #if canImport(UIKit)
+      @ExpoModule
+      final class UIKitModule {}
+      #else
+      @ExpoModule
+      final class FallbackModule {}
+      #endif
+      """
+    #expect(detect(source, platform: "tvOS").map(\.name) == ["UIKitModule"])
+    #expect(detect(source, platform: "iOS").map(\.name) == ["UIKitModule"])
+    // macOS has AppKit, not UIKit, so the #else branch activates. No warning either way.
+    #expect(detect(source, platform: "macOS").map(\.name) == ["FallbackModule"])
+    #expect(visit(source, platform: "macOS").warnings.isEmpty)
+  }
+
+  @Test
+  func `canImport stays unanswerable without a platform, with a version, or for a submodule`() {
+    let noPlatform = visit("#if canImport(UIKit)\n@ExpoModule\nfinal class M {}\n#endif")
+    #expect(noPlatform.detections.isEmpty)
+    #expect(noPlatform.warnings.first?.message.contains("no --platform") == true)
+
+    let versioned = visit(
+      "#if canImport(UIKit, _version: 2)\n@ExpoModule\nfinal class M {}\n#endif",
+      platform: "iOS"
+    )
+    #expect(versioned.detections.isEmpty)
+    #expect(versioned.warnings.count == 1)
+
+    let submodule = visit(
+      "#if canImport(UIKit.UIGestureRecognizerSubclass)\n@ExpoModule\nfinal class M {}\n#endif",
+      platform: "iOS"
+    )
+    #expect(submodule.detections.isEmpty)
+    #expect(submodule.warnings.count == 1)
   }
 
   @Test
@@ -479,7 +518,7 @@ struct ScanTests {
   func `Evaluates #if conditions and carries warnings in the result`() throws {
     try withTreeRoot([
       ("TV.swift", "#if os(tvOS)\n@ExpoModule\nfinal class TVModule {}\n#endif"),
-      ("UIKit.swift", "#if canImport(UIKit)\n@ExpoModule\nfinal class UIKitModule {}\n#endif"),
+      ("Vendored.swift", "#if canImport(SomeVendoredSDK)\n@ExpoModule\nfinal class VendoredModule {}\n#endif"),
       ("Plain.swift", "@ExpoModule\nfinal class PlainModule {}"),
     ]) { root in
       let configuration = ScanBuildConfiguration(platform: "tvOS", defines: [])
@@ -487,8 +526,8 @@ struct ScanTests {
       #expect(result.modules.map(\.name) == ["PlainModule", "TVModule"])
       // The unanswerable canImport lands in the report as a warning with its location.
       #expect(result.warnings.count == 1)
-      #expect(result.warnings.first?.message.contains("canImport(UIKit)") == true)
-      #expect(result.warnings.first?.file.hasSuffix("UIKit.swift") == true)
+      #expect(result.warnings.first?.message.contains("canImport(SomeVendoredSDK)") == true)
+      #expect(result.warnings.first?.file.hasSuffix("Vendored.swift") == true)
       #expect(result.warnings.first?.line == 1)
     }
   }

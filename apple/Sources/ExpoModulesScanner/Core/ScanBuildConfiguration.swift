@@ -42,7 +42,19 @@ struct ScanBuildConfiguration: BuildConfiguration {
 
   func canImport(importPath: [(TokenSyntax, String)], version: CanImportVersion) throws -> Bool {
     let module = importPath.map(\.1).joined(separator: ".")
-    throw ScanConfigurationError("cannot evaluate 'canImport(\(module))' in a static scan")
+
+    // A curated set of SDK frameworks is answerable from the target platform alone. Everything
+    // else (arbitrary modules, submodule paths, versioned checks) stays unanswerable: a wrong
+    // "yes" would surface a declaration that doesn't exist in the real build.
+    guard importPath.count == 1,
+      case .unversioned = version,
+      let frameworkPlatforms = sdkFrameworkPlatforms[module] else {
+      throw ScanConfigurationError("cannot evaluate 'canImport(\(module))' in a static scan")
+    }
+    guard let platform else {
+      throw ScanConfigurationError("cannot evaluate 'canImport(\(module))': no --platform was given")
+    }
+    return frameworkPlatforms.contains(platform.lowercased())
   }
 
   func isActiveTargetArchitecture(name: String) throws -> Bool {
@@ -74,6 +86,29 @@ struct ScanBuildConfiguration: BuildConfiguration {
   var languageVersion: VersionTuple { VersionTuple(6) }
   var compilerVersion: VersionTuple { VersionTuple(6, 2) }
 }
+
+/// The platforms (lowercased, as compared against `--platform`) that ship each of a curated set of
+/// Apple SDK frameworks, so `canImport` of one is answerable from the platform alone. The list is
+/// deliberately small and high-confidence: it covers the frameworks realistically used to gate a
+/// module class, and a framework missing here degrades to the skip-with-warning path rather than a
+/// wrong answer.
+private let sdkFrameworkPlatforms: [String: Set<String>] = [
+  "UIKit": ["ios", "tvos", "watchos", "visionos"],
+  "AppKit": ["macos"],
+  "SwiftUI": ["ios", "macos", "tvos", "watchos", "visionos"],
+  "WatchKit": ["watchos"],
+  "TVUIKit": ["tvos"],
+  "WebKit": ["ios", "macos", "visionos"],
+  "SafariServices": ["ios", "macos", "visionos"],
+  "ARKit": ["ios", "visionos"],
+  "RealityKit": ["ios", "macos", "visionos"],
+  "CarPlay": ["ios"],
+  "MessageUI": ["ios"],
+  "CoreNFC": ["ios"],
+  "HealthKit": ["ios", "watchos", "visionos"],
+  "HomeKit": ["ios", "tvos", "watchos", "visionos"],
+  "WidgetKit": ["ios", "macos", "watchos", "visionos"],
+]
 
 /// An unanswerable `#if` condition. SwiftIfConfig converts the thrown error into a diagnostic on
 /// the condition's node and treats the region as inactive.
