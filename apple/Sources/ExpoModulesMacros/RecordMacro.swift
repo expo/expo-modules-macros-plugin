@@ -479,37 +479,6 @@ private func isExcludedByModifier(_ modifiers: DeclModifierListSyntax) -> Bool {
 }
 
 /**
- True if the type's inheritance clause already lists a protocol with the given name.
- Matches either the bare identifier (`Record`) or a qualified member access ending in
- the name (`ExpoModulesCore.Record`).
- */
-private func inheritsProtocol(named name: String, in declaration: some DeclGroupSyntax) -> Bool {
-  let inheritanceClause: InheritanceClauseSyntax?
-  if let structDecl = declaration.as(StructDeclSyntax.self) {
-    inheritanceClause = structDecl.inheritanceClause
-  } else if let classDecl = declaration.as(ClassDeclSyntax.self) {
-    inheritanceClause = classDecl.inheritanceClause
-  } else {
-    return false
-  }
-  guard let inherited = inheritanceClause?.inheritedTypes else {
-    return false
-  }
-  for entry in inherited {
-    let typeSyntax = entry.type
-    if let identifier = typeSyntax.as(IdentifierTypeSyntax.self),
-      identifier.name.text == name {
-      return true
-    }
-    if let member = typeSyntax.as(MemberTypeSyntax.self),
-      member.name.text == name {
-      return true
-    }
-  }
-  return false
-}
-
-/**
  True if the class declaration has any inheritance clause. Used as a heuristic for
  whether the superclass also conforms to `Record` and provides the synthesized methods;
  the macro emits `override` in this case.

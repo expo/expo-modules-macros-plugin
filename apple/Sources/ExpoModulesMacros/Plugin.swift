@@ -10,5 +10,6 @@ struct ExpoModulesMacrosPlugin: CompilerPlugin {
     ExpoModuleMacro.self,
     SharedObjectMacro.self,
     RecordMacro.self,
+    UnionMacro.self,
   ]
 }

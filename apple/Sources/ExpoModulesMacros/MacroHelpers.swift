@@ -326,3 +326,25 @@ internal func bindingIsSettable(_ binding: PatternBindingSyntax) -> Bool {
     return false
   }
 }
+
+/// True if the type's inheritance clause already lists a protocol with the given name. Matches
+/// either the bare identifier (`Record`) or a qualified member access ending in the name
+/// (`ExpoModulesCore.Record`). Used by the extension macros to skip a conformance the author already
+/// spelled out. Works for `struct`, `class`, and `enum` declarations; any other declaration kind has no
+/// inheritance clause to read and reports `false`.
+internal func inheritsProtocol(named name: String, in declaration: some DeclGroupSyntax) -> Bool {
+  let inheritanceClause: InheritanceClauseSyntax?
+  if let structDecl = declaration.as(StructDeclSyntax.self) {
+    inheritanceClause = structDecl.inheritanceClause
+  } else if let classDecl = declaration.as(ClassDeclSyntax.self) {
+    inheritanceClause = classDecl.inheritanceClause
+  } else if let enumDecl = declaration.as(EnumDeclSyntax.self) {
+    inheritanceClause = enumDecl.inheritanceClause
+  } else {
+    return false
+  }
+  guard let inherited = inheritanceClause?.inheritedTypes else {
+    return false
+  }
+  return inherited.contains { baseIdentifier(of: $0.type) == name }
+}
