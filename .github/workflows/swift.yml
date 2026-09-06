@@ -54,6 +54,9 @@ jobs:
           case "$archs" in *x86_64*) ;; *) echo "Missing x86_64 slice"; exit 1;; esac
           arch -arm64 ./ExpoModulesMacros-tool < /dev/null
           arch -x86_64 ./ExpoModulesMacros-tool < /dev/null
+          # With arguments the same binary runs the scanner CLI instead of the plugin server.
+          arch -arm64 ./ExpoModulesMacros-tool --help > /dev/null
+          arch -x86_64 ./ExpoModulesMacros-tool --help > /dev/null
 
       - name: Test
         run: swift test -v

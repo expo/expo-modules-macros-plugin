@@ -8,19 +8,19 @@ import PackageDescription
 let package = Package(
   name: "ExpoModulesMacros",
   platforms: [.macOS(.v13)],
-  products: [
-    // The scanner CLI. Named `ExpoModulesScanner` (the user-facing tool name) while its target is
-    // `ExpoModulesScannerCLI`; the detection logic lives in the importable `ExpoModulesScanner`
-    // library that both the CLI and the tests depend on.
-    .executable(name: "ExpoModulesScanner", targets: ["ExpoModulesScannerCLI"]),
-  ],
   dependencies: [
     .package(url: "https://github.com/swiftlang/swift-syntax.git", from: "602.0.0-latest")
   ],
   targets: [
+    // The plugin executable doubles as the scanner CLI: the compiler launches it without arguments
+    // and speaks the plugin protocol over stdin, while an invocation with arguments dispatches into
+    // `ScannerCLI` (see the entry point in Plugin.swift). Sharing the binary keeps the package to a
+    // single shipped executable; the scanner adds little on top of the SwiftSyntax the macros
+    // already link.
     .macro(
       name: "ExpoModulesMacros",
       dependencies: [
+        "ExpoModulesScanner",
         .product(name: "SwiftSyntaxMacros", package: "swift-syntax"),
         .product(name: "SwiftCompilerPlugin", package: "swift-syntax"),
       ]
@@ -31,10 +31,6 @@ let package = Package(
         .product(name: "SwiftSyntax", package: "swift-syntax"),
         .product(name: "SwiftParser", package: "swift-syntax"),
       ]
-    ),
-    .executableTarget(
-      name: "ExpoModulesScannerCLI",
-      dependencies: ["ExpoModulesScanner"]
     ),
   ]
 )
