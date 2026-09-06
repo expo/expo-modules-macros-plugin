@@ -50,7 +50,7 @@ func scanFiles(
 func collectDetections(
   paths: [String],
   macros: Set<DetectedMacro>,
-  configuration: ScanBuildConfiguration = .init(platform: nil, defines: [])
+  configuration: ScanBuildConfiguration? = nil
 ) -> (detections: [Detection], warnings: [ScanWarning], stats: ScanStats) {
   var detections: [Detection] = []
   var warnings: [ScanWarning] = []
@@ -68,7 +68,7 @@ func detect(
   source: String,
   file: String,
   macros: Set<DetectedMacro>,
-  configuration: ScanBuildConfiguration
+  configuration: ScanBuildConfiguration?
 ) -> (detections: [Detection], warnings: [ScanWarning]) {
   let tree = Parser.parse(source: source)
   let visitor = DetectionVisitor(file: file, tree: tree, detectedMacros: macros, configuration: configuration)

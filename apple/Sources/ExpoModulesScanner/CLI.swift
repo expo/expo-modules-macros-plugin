@@ -49,10 +49,15 @@ public enum ScannerCLI {
 
     switch subcommand {
     case "scan-modules":
+      // scan-modules is platform-agnostic: each reported module carries the platforms that include
+      // it, and the consumer filters. An option selecting one platform would silently drop data.
+      guard platform == nil else {
+        return usageError("scan-modules does not take --platform; each module reports its 'platforms' and the consumer filters")
+      }
       guard !paths.isEmpty else {
         return usageError("scan-modules requires at least one path")
       }
-      return Scanner.runModules(paths: paths, platform: platform, defines: defines)
+      return Scanner.runModules(paths: paths, defines: defines)
 
     case "scan-exports":
       // The exports surface visitor doesn't evaluate `#if` blocks yet, so accepting the options
@@ -86,9 +91,8 @@ private var usageText: String {
     scan-exports   deep scan of the full JS-exported surface (type generation)
 
   options (scan-modules only):
-    --platform <os>   evaluate '#if os(...)' against this platform (iOS, macOS, tvOS, ...);
-                      without it, os-conditional declarations are skipped with a warning
-    --define <flag>   treat a conditional compilation flag (e.g. DEBUG) as set; repeatable
+    --define <flag>   treat a conditional compilation flag (e.g. DEBUG) as set when resolving
+                      each module's 'platforms' list; repeatable
 
   options:
     -h, --help        print this help and exit
