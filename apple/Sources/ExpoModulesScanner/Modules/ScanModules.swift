@@ -1,4 +1,5 @@
 import Foundation
+import SwiftParser
 
 /// The scanner's public entry point. Argument parsing, subcommand dispatch, and usage text live in
 /// the CLI target; this just runs a command and writes its JSON report to stdout.
@@ -10,11 +11,10 @@ public enum Scanner {
   /// process exit code: `0` on success, `1` if encoding fails. (The deep `scan-exports` command has
   /// its own `runExports` entry returning its own result type.)
   ///
-  /// `platform` and `defines` (the `--platform` and `--define` options) form the configuration that
-  /// `#if` conditions are evaluated against; see `ScanBuildConfiguration`.
-  public static func runModules(paths: [String], platform: String? = nil, defines: [String] = []) -> Int32 {
-    let configuration = ScanBuildConfiguration(platform: platform, defines: Set(defines))
-    let result = scanModules(paths: paths, configuration: configuration)
+  /// `defines` (the `--define` options) asserts conditional compilation flags; see `scanModules`
+  /// for how they and platforms shape each module's `platforms` list.
+  public static func runModules(paths: [String], defines: [String] = []) -> Int32 {
+    let result = scanModules(paths: paths, defines: Set(defines))
 
     do {
       let encoder = JSONEncoder()
@@ -31,10 +31,11 @@ public enum Scanner {
 }
 
 /// One module in the `scan-modules` output. Trimmed to what `expo-modules-autolinking` needs to
-/// register a module: the Swift class name, the JS name it registers under, and the file it's in.
-/// The richer fields the visitor captures (declaration kind, raw macro arguments, line/column) are
-/// dropped here — they're redundant for this command (the macro is always `@ExpoModule` on a class)
-/// and the deep `scan-exports` surface carries the richer per-member detail instead.
+/// register a module: the Swift class name, the JS name it registers under, the platforms that
+/// include it, and the file it's in. The richer fields the visitor captures (declaration kind, raw
+/// macro arguments, line/column) are dropped here — they're redundant for this command (the macro
+/// is always `@ExpoModule` on a class) and the deep `scan-exports` surface carries the richer
+/// per-member detail instead.
 struct ScannedModule: Codable, Equatable {
   /// The Swift class name the module is declared as.
   let name: String
@@ -50,14 +51,23 @@ struct ScannedModule: Codable, Equatable {
   /// classes with a diagnostic instead of emitting a provider that fails to compile.
   let accessLevel: String
 
+  /// The Apple OSes (lowercased: `ios`, `macos`, `tvos`, `watchos`, `visionos`) whose builds
+  /// include this class, resolved from the `#if` conditions enclosing it. An unconditional module
+  /// lists every OS. Empty means no build is known to include it: the enclosing conditions depend
+  /// on flags not asserted with `--define` (e.g. `DEBUG`) or on conditions a static scan cannot
+  /// answer (e.g. `canImport` of a non-SDK module, reported in `warnings`) — the consumer decides
+  /// what to do with such modules, but must not assume the class exists.
+  let platforms: [String]
+
   /// Source file the module was found in, relative to the path the scanner was invoked with.
   let file: String
 }
 
 /// Version of the `scan-modules` output shape. Bumped on any breaking change to the envelope or to
 /// `ScannedModule`, so `expo-modules-autolinking` can verify it understands the output before
-/// trusting it (and fall back to config-declared modules when it doesn't).
-let scanModulesSchemaVersion = 1
+/// trusting it (and fall back to config-declared modules when it doesn't). Version 2 added the
+/// per-module `platforms` list and made the module list platform-agnostic.
+let scanModulesSchemaVersion = 2
 
 /// The `scan-modules` result: the detected modules plus the stats describing the run. Encoded as the
 /// command's JSON output. (`scan-exports` returns its own `ScanExportsResult` shape; the two commands
@@ -73,22 +83,73 @@ struct ScanModulesResult: Codable, Equatable {
   let stats: ScanStats
 }
 
-/// Scans the given paths for top-level `@ExpoModule` types and returns the modules (in file then
-/// source order) plus the stats for the run — the `scan-modules` command. Kept separate from the
-/// public entry (and `internal`) so tests can drive it without going through argv/stdout.
-func scanModules(paths: [String], configuration: ScanBuildConfiguration = .init(platform: nil, defines: [])) -> ScanModulesResult {
-  let scan = collectDetections(paths: paths, macros: [.expoModule], configuration: configuration)
+/// The Apple OSes a scan attributes modules to, in the spelling `os(...)` conditions use; the
+/// report carries them lowercased.
+private let platformUniverse = ["iOS", "macOS", "tvOS", "watchOS", "visionOS"]
 
-  let modules = scan.detections.map {
-    // Resolve the JS name the way the macro does: explicit `@ExpoModule("Foo")` override, else the
-    // class name.
-    ScannedModule(name: $0.name, jsName: $0.jsName ?? $0.name, accessLevel: $0.accessLevel, file: $0.file)
+/// Scans the given paths for top-level `@ExpoModule` types and returns every module found in any
+/// `#if` branch (in file then source order), each with the platforms whose builds include it, plus
+/// the stats for the run — the `scan-modules` command. Kept separate from the public entry (and
+/// `internal`) so tests can drive it without going through argv/stdout.
+///
+/// Each file is parsed once and walked once per platform (plus once unconditionally to enumerate
+/// every module): a module's `platforms` are the OSes whose evaluated walk reached it, given the
+/// asserted `defines`. The scanner reports the facts; filtering to the platform being linked is the
+/// consumer's call.
+func scanModules(paths: [String], defines: Set<String> = []) -> ScanModulesResult {
+  var modules: [ScannedModule] = []
+  var warnings: [ScanWarning] = []
+  var seenWarnings = Set<ScanWarning>()
+
+  let stats = scanFiles(paths: paths, macros: [.expoModule]) { source, file in
+    let tree = Parser.parse(source: source)
+
+    // The unconditional walk enumerates every module in the file, in source order.
+    let allModules = DetectionVisitor(file: file, tree: tree, detectedMacros: [.expoModule], configuration: nil)
+    allModules.walk(tree)
+
+    // One evaluated walk per OS attributes each module to the platforms that include it. The walks
+    // are cheap relative to the parse, which is shared.
+    var platformsByDetection: [String: [String]] = [:]
+    for platform in platformUniverse {
+      let configuration = ScanBuildConfiguration(platform: platform, defines: defines)
+      let visitor = DetectionVisitor(file: file, tree: tree, detectedMacros: [.expoModule], configuration: configuration)
+      visitor.walk(tree)
+      for detection in visitor.detections {
+        platformsByDetection[detectionKey(detection), default: []].append(platform.lowercased())
+      }
+      // The same unanswerable condition diagnoses identically in every per-platform walk; report
+      // it once.
+      for warning in visitor.warnings where seenWarnings.insert(warning).inserted {
+        warnings.append(warning)
+      }
+    }
+
+    for detection in allModules.detections {
+      // Resolve the JS name the way the macro does: explicit `@ExpoModule("Foo")` override, else
+      // the class name.
+      modules.append(
+        ScannedModule(
+          name: detection.name,
+          jsName: detection.jsName ?? detection.name,
+          accessLevel: detection.accessLevel,
+          platforms: platformsByDetection[detectionKey(detection)] ?? [],
+          file: detection.file
+        )
+      )
+    }
   }
 
   return ScanModulesResult(
     schemaVersion: scanModulesSchemaVersion,
     modules: modules,
-    warnings: scan.warnings,
-    stats: scan.stats
+    warnings: warnings,
+    stats: stats
   )
+}
+
+/// Identifies one declaration across the per-platform walks of the same tree: the source position
+/// is unique within a file, and the name guards against any position ambiguity.
+private func detectionKey(_ detection: Detection) -> String {
+  return "\(detection.line):\(detection.column):\(detection.name)"
 }

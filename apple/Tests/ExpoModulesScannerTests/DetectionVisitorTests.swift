@@ -28,7 +28,7 @@ private func visit(
     file: "Test.swift",
     tree: tree,
     detectedMacros: macros,
-    configuration: ScanBuildConfiguration(platform: platform, defines: defines)
+    configuration: platform.map { ScanBuildConfiguration(platform: $0, defines: defines) }
   )
   visitor.walk(tree)
   return visitor
@@ -332,19 +332,40 @@ struct IfConfigTests {
   }
 
   @Test
-  func `An os condition with no platform given skips the region and warns`() {
+  func `Without a platform, reports declarations from every branch and evaluates nothing`() {
     let visitor = visit(
       """
       #if os(iOS)
       @ExpoModule
-      final class ConditionalModule {}
+      final class IosModule {}
+      #else
+      @ExpoModule
+      final class OtherModule {}
+      #endif
+
+      #if canImport(SomeVendoredSDK) && DEBUG
+      @ExpoModule
+      final class UnanswerableModule {}
       #endif
       """
     )
-    #expect(visitor.detections.isEmpty)
-    #expect(visitor.warnings.count == 1)
-    #expect(visitor.warnings.first?.message.contains("os(iOS)") == true)
-    #expect(visitor.warnings.first?.line == 1)
+    #expect(visitor.detections.map(\.name) == ["IosModule", "OtherModule", "UnanswerableModule"])
+    #expect(visitor.warnings.isEmpty)
+  }
+
+  @Test
+  func `Without a platform, reports declarations nested in #if blocks`() {
+    let detections = detect(
+      """
+      #if os(macOS)
+      #if DEBUG
+      @ExpoModule
+      final class NestedModule {}
+      #endif
+      #endif
+      """
+    )
+    #expect(detections.map(\.name) == ["NestedModule"])
   }
 
   @Test
@@ -381,11 +402,7 @@ struct IfConfigTests {
   }
 
   @Test
-  func `canImport stays unanswerable without a platform, with a version, or for a submodule`() {
-    let noPlatform = visit("#if canImport(UIKit)\n@ExpoModule\nfinal class M {}\n#endif")
-    #expect(noPlatform.detections.isEmpty)
-    #expect(noPlatform.warnings.first?.message.contains("no --platform") == true)
-
+  func `canImport stays unanswerable with a version or for a submodule`() {
     let versioned = visit(
       "#if canImport(UIKit, _version: 2)\n@ExpoModule\nfinal class M {}\n#endif",
       platform: "iOS"
@@ -515,20 +532,47 @@ struct ScanTests {
   }
 
   @Test
-  func `Evaluates #if conditions and carries warnings in the result`() throws {
+  func `Resolves each module's platforms from its #if conditions`() throws {
     try withTreeRoot([
-      ("TV.swift", "#if os(tvOS)\n@ExpoModule\nfinal class TVModule {}\n#endif"),
+      ("TV.swift", "#if os(tvOS)\n@ExpoModule\nfinal class TVModule {}\n#else\n@ExpoModule\nfinal class NonTVModule {}\n#endif"),
+      ("UIKit.swift", "#if canImport(UIKit)\n@ExpoModule\nfinal class UIKitModule {}\n#endif"),
       ("Vendored.swift", "#if canImport(SomeVendoredSDK)\n@ExpoModule\nfinal class VendoredModule {}\n#endif"),
       ("Plain.swift", "@ExpoModule\nfinal class PlainModule {}"),
     ]) { root in
-      let configuration = ScanBuildConfiguration(platform: "tvOS", defines: [])
-      let result = scanModules(paths: [root.path], configuration: configuration)
-      #expect(result.modules.map(\.name) == ["PlainModule", "TVModule"])
-      // The unanswerable canImport lands in the report as a warning with its location.
+      let result = scanModules(paths: [root.path])
+      let byName = Dictionary(uniqueKeysWithValues: result.modules.map { ($0.name, $0.platforms) })
+      // An unconditional module is included by every OS.
+      #expect(byName["PlainModule"] == ["ios", "macos", "tvos", "watchos", "visionos"])
+      #expect(byName["TVModule"] == ["tvos"])
+      #expect(byName["NonTVModule"] == ["ios", "macos", "watchos", "visionos"])
+      // canImport of a curated SDK framework resolves per platform.
+      #expect(byName["UIKitModule"] == ["ios", "tvos", "watchos", "visionos"])
+      // An unanswerable condition yields no platforms, and one deduplicated warning explains why.
+      #expect(byName["VendoredModule"] == [])
       #expect(result.warnings.count == 1)
       #expect(result.warnings.first?.message.contains("canImport(SomeVendoredSDK)") == true)
       #expect(result.warnings.first?.file.hasSuffix("Vendored.swift") == true)
       #expect(result.warnings.first?.line == 1)
+    }
+  }
+
+  @Test
+  func `Asserted flags shape the platforms of flag-gated modules`() throws {
+    try withTreeRoot([
+      ("Dev.swift", "#if DEBUG\n@ExpoModule\nfinal class DevModule {}\n#else\n@ExpoModule\nfinal class ProdModule {}\n#endif"),
+      ("DevIos.swift", "#if DEBUG && os(iOS)\n@ExpoModule\nfinal class DevIosModule {}\n#endif"),
+    ]) { root in
+      // Without asserted flags, a flag is unset, the way an undefined flag behaves in a real build:
+      // the modules are still reported, with the platforms of the branches that remain.
+      let unset = Dictionary(uniqueKeysWithValues: scanModules(paths: [root.path]).modules.map { ($0.name, $0.platforms) })
+      #expect(unset["DevModule"] == [])
+      #expect(unset["ProdModule"] == ["ios", "macos", "tvos", "watchos", "visionos"])
+      #expect(unset["DevIosModule"] == [])
+
+      let debug = Dictionary(uniqueKeysWithValues: scanModules(paths: [root.path], defines: ["DEBUG"]).modules.map { ($0.name, $0.platforms) })
+      #expect(debug["DevModule"] == ["ios", "macos", "tvos", "watchos", "visionos"])
+      #expect(debug["ProdModule"] == [])
+      #expect(debug["DevIosModule"] == ["ios"])
     }
   }
 
