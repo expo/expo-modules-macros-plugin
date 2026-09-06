@@ -21,6 +21,12 @@ internal let javaScriptEncodableProtocolName = "JavaScriptEncodable"
 /// support both directions, so the assertion requires the intersection.
 internal let recordFieldProtocolName = "AnyArgument & JavaScriptDecodable & JavaScriptEncodable"
 
+/// The constraint a `@Union` case payload type must satisfy: the union decodes by trying each payload's
+/// `decode` and encodes through the matching payload's `encode`, so every alternative must convert in
+/// both directions. Unlike a `@Record` field, a union never crosses the native-`Any` dictionary path, so
+/// `AnyArgument` is not required.
+internal let unionPayloadProtocolName = "JavaScriptDecodable & JavaScriptEncodable"
+
 /// The protocol a type must conform to for `self.emit(event:…)` to resolve; core conforms
 /// `BaseModule` and `SharedObject` to it. Asserted by `@Event` so attaching it to a type that can't
 /// emit fails with a conformance diagnostic instead of an opaque "no member 'emit'" error.
