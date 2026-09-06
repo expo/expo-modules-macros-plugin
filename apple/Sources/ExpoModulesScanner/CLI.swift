@@ -24,16 +24,42 @@ public enum ScannerCLI {
       printUsage()
       return 2
     }
-    let paths = Array(arguments.dropFirst())
+
+    var paths: [String] = []
+    var platform: String?
+    var defines: [String] = []
+
+    var rest = arguments.dropFirst().makeIterator()
+    while let argument = rest.next() {
+      switch argument {
+      case "--platform":
+        guard let value = rest.next() else {
+          return usageError("--platform requires a value")
+        }
+        platform = value
+      case "--define":
+        guard let value = rest.next() else {
+          return usageError("--define requires a value")
+        }
+        defines.append(value)
+      default:
+        paths.append(argument)
+      }
+    }
 
     switch subcommand {
     case "scan-modules":
       guard !paths.isEmpty else {
         return usageError("scan-modules requires at least one path")
       }
-      return Scanner.runModules(paths: paths)
+      return Scanner.runModules(paths: paths, platform: platform, defines: defines)
 
     case "scan-exports":
+      // The exports surface visitor doesn't evaluate `#if` blocks yet, so accepting the options
+      // here would silently do nothing.
+      guard platform == nil, defines.isEmpty else {
+        return usageError("scan-exports does not support --platform or --define")
+      }
       guard !paths.isEmpty else {
         return usageError("scan-exports requires at least one path")
       }
@@ -53,14 +79,19 @@ private var toolName: String {
 
 private var usageText: String {
   """
-  usage: \(toolName) <subcommand> <path> [<path> ...]
+  usage: \(toolName) <subcommand> [options] <path> [<path> ...]
 
   subcommands:
     scan-modules   fast scan for top-level @ExpoModule types (autolinking)
     scan-exports   deep scan of the full JS-exported surface (type generation)
 
+  options (scan-modules only):
+    --platform <os>   evaluate '#if os(...)' against this platform (iOS, macOS, tvOS, ...);
+                      without it, os-conditional declarations are skipped with a warning
+    --define <flag>   treat a conditional compilation flag (e.g. DEBUG) as set; repeatable
+
   options:
-    -h, --help     print this help and exit
+    -h, --help        print this help and exit
 
   """
 }

@@ -9,8 +9,12 @@ public enum Scanner {
   /// Runs the `scan-modules` command over `paths`, prints the JSON report to stdout, and returns a
   /// process exit code: `0` on success, `1` if encoding fails. (The deep `scan-exports` command has
   /// its own `runExports` entry returning its own result type.)
-  public static func runModules(paths: [String]) -> Int32 {
-    let result = scanModules(paths: paths)
+  ///
+  /// `platform` and `defines` (the `--platform` and `--define` options) form the configuration that
+  /// `#if` conditions are evaluated against; see `ScanBuildConfiguration`.
+  public static func runModules(paths: [String], platform: String? = nil, defines: [String] = []) -> Int32 {
+    let configuration = ScanBuildConfiguration(platform: platform, defines: Set(defines))
+    let result = scanModules(paths: paths, configuration: configuration)
 
     do {
       let encoder = JSONEncoder()
@@ -61,14 +65,19 @@ let scanModulesSchemaVersion = 1
 struct ScanModulesResult: Codable, Equatable {
   let schemaVersion: Int
   let modules: [ScannedModule]
+
+  /// Warnings for `#if` conditions the scan couldn't answer statically (see `ScanWarning`). Carried
+  /// in the report rather than on stderr so the consumer can attach them to its own output.
+  let warnings: [ScanWarning]
+
   let stats: ScanStats
 }
 
 /// Scans the given paths for top-level `@ExpoModule` types and returns the modules (in file then
 /// source order) plus the stats for the run — the `scan-modules` command. Kept separate from the
 /// public entry (and `internal`) so tests can drive it without going through argv/stdout.
-func scanModules(paths: [String]) -> ScanModulesResult {
-  let scan = collectDetections(paths: paths, macros: [.expoModule])
+func scanModules(paths: [String], configuration: ScanBuildConfiguration = .init(platform: nil, defines: [])) -> ScanModulesResult {
+  let scan = collectDetections(paths: paths, macros: [.expoModule], configuration: configuration)
 
   let modules = scan.detections.map {
     // Resolve the JS name the way the macro does: explicit `@ExpoModule("Foo")` override, else the
@@ -76,5 +85,10 @@ func scanModules(paths: [String]) -> ScanModulesResult {
     ScannedModule(name: $0.name, jsName: $0.jsName ?? $0.name, accessLevel: $0.accessLevel, file: $0.file)
   }
 
-  return ScanModulesResult(schemaVersion: scanModulesSchemaVersion, modules: modules, stats: scan.stats)
+  return ScanModulesResult(
+    schemaVersion: scanModulesSchemaVersion,
+    modules: modules,
+    warnings: scan.warnings,
+    stats: scan.stats
+  )
 }

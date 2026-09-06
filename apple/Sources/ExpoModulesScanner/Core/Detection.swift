@@ -53,6 +53,16 @@ struct Detection: Codable, Equatable {
   let column: Int
 }
 
+/// A non-fatal problem found while scanning, tied to the source location that caused it — today,
+/// an `#if` condition the scan's static configuration cannot answer (`canImport`, `arch`, an
+/// `os(...)` check with no `--platform` given, …). The affected region is treated as inactive, so
+/// the warning tells the consumer which declarations may have been skipped and why.
+struct ScanWarning: Codable, Equatable {
+  let message: String
+  let file: String
+  let line: Int
+}
+
 /// Counts describing how much work the scan did, so callers can see the pre-filter's effect: of all
 /// the `.swift` files read, how many actually needed parsing, and how long the run took.
 struct ScanStats: Codable, Equatable {
