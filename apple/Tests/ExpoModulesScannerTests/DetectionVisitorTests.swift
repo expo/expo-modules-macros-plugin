@@ -515,6 +515,25 @@ struct ScanTests {
   }
 
   @Test
+  func `Prunes test and example directories`() throws {
+    try withTree([
+      ("ios/Real.swift", "@ExpoModule\npublic final class RealModule {}"),
+      // Test and example sources are not compiled into the package's product, so a module declared
+      // there (even a public one) must not be reported.
+      ("ios/Tests/Fixture.swift", "@ExpoModule\npublic final class TestFixtureModule {}"),
+      ("ios/UITests/UIFixture.swift", "@ExpoModule\npublic final class UIFixtureModule {}"),
+      ("__tests__/JsStyle.swift", "@ExpoModule\npublic final class JsStyleModule {}"),
+      ("__mocks__/Mock.swift", "@ExpoModule\npublic final class MockModule {}"),
+      ("example/ios/App.swift", "@ExpoModule\npublic final class ExampleAppModule {}"),
+      ("examples/basic/Basic.swift", "@ExpoModule\npublic final class BasicExampleModule {}"),
+      ("e2e/fixtures/E2E.swift", "@ExpoModule\npublic final class E2EFixtureModule {}"),
+    ]) { result in
+      #expect(result.modules.map(\.name) == ["RealModule"])
+      #expect(result.stats.filesScanned == 1)
+    }
+  }
+
+  @Test
   func `Evaluates #if conditions and carries warnings in the result`() throws {
     try withTreeRoot([
       ("TV.swift", "#if os(tvOS)\n@ExpoModule\nfinal class TVModule {}\n#endif"),

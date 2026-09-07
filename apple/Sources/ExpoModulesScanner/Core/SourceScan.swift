@@ -100,11 +100,21 @@ func mightContainMacro(in source: String, prefilter: NSRegularExpression) -> Boo
 
 // MARK: - File discovery
 
-/// Directory names skipped during the recursive walk. These hold build products, dependencies, and
-/// git internals — never source worth scanning — and pruning them keeps the walk from descending
-/// into the bulk of a monorepo's files. `node_modules` makes any npm package root safe to pass as a
-/// scan path: nested dependencies are separate packages and get scanned on their own.
-private let prunedDirectoryNames: Set<String> = [".build", "Pods", ".git", "node_modules"]
+/// Directory names skipped during the recursive walk, in two groups:
+/// - Build products, dependencies, and git internals (`.build`, `Pods`, `.git`, `node_modules`) are
+///   never source worth scanning, and pruning them keeps the walk from descending into the bulk of
+///   a monorepo's files. `node_modules` also makes any npm package root safe to pass as a scan
+///   path: nested dependencies are separate packages and get scanned on their own.
+/// - Test and example directories, by the layout conventions of Expo module packages (`Tests`,
+///   `UITests`, `__tests__`, `__mocks__`, `example(s)`, `e2e`). Their sources are not compiled into the
+///   package's product (they belong to a `test_spec` or a standalone example app), so a declaration
+///   found there would name a type the consumer can't reference. This is a name-based heuristic;
+///   a package keeping product sources in such a directory can declare its modules in
+///   `expo-module.config.json` instead.
+private let prunedDirectoryNames: Set<String> = [
+  ".build", "Pods", ".git", "node_modules",
+  "Tests", "UITests", "__tests__", "__mocks__", "example", "examples", "e2e",
+]
 
 /// Expands the given paths into the list of `.swift` files to parse: a file path passes through,
 /// a directory is enumerated recursively (skipping `prunedDirectoryNames`). Order is deterministic
