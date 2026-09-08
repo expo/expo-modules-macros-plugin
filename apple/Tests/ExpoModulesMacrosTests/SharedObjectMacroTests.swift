@@ -862,6 +862,46 @@ struct ExpoModuleClassesTests {
   }
 
   @Test
+  func `@JS(.concurrent) swaps the @JavaScriptActor stamp for @concurrent`() {
+    assertExpansion(
+      """
+      @SharedObject
+      final class Cache: SharedObject {
+        @JS(.concurrent)
+        func fetch() async -> Int { 1 }
+      }
+      """,
+      expandedSource: """
+        final class Cache: SharedObject {
+          @concurrent
+          func fetch() async -> Int { 1 }
+
+          public static func _synthesizedClassDefinition() -> ClassDefinition {
+            return Class("Cache", Cache.self) {
+            }
+          }
+
+          @JavaScriptActor
+          public override class func _decorateSharedObject(prototype: borrowing JavaScriptObject, in runtime: JavaScriptRuntime) throws {
+            prototype.setProperty("fetch") { (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
+              let _self = try SharedObject.native(from: this.asObject(in: runtime), as: Cache.self)
+              guard arguments.count == 0 else {
+                throw Exceptions.ArgumentsRangeMismatch((functionName: "fetch", received: arguments.count, required: 0, maximum: 0))
+              }
+              return {
+                let result = try await _self.fetch()
+                return try await runtime.execute {
+                  return try Int.encode(result, in: runtime)
+                }
+              }
+            }
+          }
+        }
+        """
+    )
+  }
+
+  @Test
   func `classes: combines with custom module name and exposed members`() {
     assertExpansion(
       """

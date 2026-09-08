@@ -141,8 +141,14 @@ extension SharedObjectMacro: MemberAttributeMacro {
     // `@Event(sync: true)` members are stamped alongside `@JS` ones: a sync event dispatches
     // inline, so the isolation forces its call site onto the JS thread. Async events (the
     // default) stay unstamped — their `emit` schedules onto the JS thread itself.
-    guard memberHasJSAttribute(member) || isSyncEventMember(member),
-      shouldStampJavaScriptActor(on: member, enclosedBy: declaration) else {
+    guard memberHasJSAttribute(member) || isSyncEventMember(member) else {
+      return []
+    }
+    // `@JS(.concurrent)` opts the member out of the JS-thread stamp and onto the concurrent pool.
+    if isConcurrentJSMember(member) {
+      return ["@concurrent"]
+    }
+    guard shouldStampJavaScriptActor(on: member, enclosedBy: declaration) else {
       return []
     }
     return ["@JavaScriptActor"]

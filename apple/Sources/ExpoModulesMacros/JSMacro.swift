@@ -32,6 +32,7 @@ public struct JSMacro: PeerMacro {
     in context: some MacroExpansionContext
   ) throws -> [DeclSyntax] {
     diagnoseFreeFormTypes(in: declaration, in: context)
+    diagnoseConcurrentOption(of: node, on: declaration, in: context)
 
     guard let member = boundaryMember(of: declaration),
       let assertion = directionalConformanceAssertion(
@@ -44,6 +45,42 @@ public struct JSMacro: PeerMacro {
     }
     return [assertion]
   }
+}
+
+/// Emits the diagnostic for `@JS(.concurrent)` on a member that can't take it. The option maps to
+/// Swift's `@concurrent`, which requires an `async` function: a synchronous member has nowhere to
+/// suspend, and a property or initializer can't be async at all. Diagnosing here points at the
+/// user's own `@JS` attribute rather than at the `@concurrent` the module macro would attach.
+private func diagnoseConcurrentOption(
+  of node: AttributeSyntax,
+  on declaration: some DeclSyntaxProtocol,
+  in context: some MacroExpansionContext
+) {
+  guard hasJSOption(node, named: "concurrent") else {
+    return
+  }
+  if let funcDecl = declaration.as(FunctionDeclSyntax.self) {
+    guard funcDecl.signature.effectSpecifiers?.asyncSpecifier == nil else {
+      return
+    }
+    context.diagnose(
+      Diagnostic(
+        node: node,
+        message: JSDiagnosticMessage(
+          "'.concurrent' needs an 'async' function: a synchronous @JS member runs on the JavaScript thread by definition. Mark the function 'async' to run its body off that thread.",
+          id: "js-concurrent-requires-async",
+          severity: .error
+        )))
+    return
+  }
+  context.diagnose(
+    Diagnostic(
+      node: node,
+      message: JSDiagnosticMessage(
+        "'.concurrent' applies only to an 'async' @JS function, not to a property or initializer.",
+        id: "js-concurrent-requires-function",
+        severity: .error
+      )))
 }
 
 /// Emits the free-form (`Any` / `[Any]` / `[String: Any]`) diagnostics for a `@JS` declaration.
