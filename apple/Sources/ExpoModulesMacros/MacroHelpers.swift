@@ -31,6 +31,44 @@ internal func boolArgument(of attribute: AttributeSyntax, label: String) -> Bool
   return nil
 }
 
+/// True if the attribute lists the given `JSOptions` member, e.g. `@JS(.concurrent)` or
+/// `@JS("name", [.concurrent])` -> true for "concurrent". Options are written as member-access
+/// expressions (`.concurrent`), optionally inside an array literal when more than one is combined, so
+/// both spellings are scanned. The leading string literal, when present, is the JS name and is skipped.
+internal func hasJSOption(_ attribute: AttributeSyntax, named option: String) -> Bool {
+  guard let args = attribute.arguments?.as(LabeledExprListSyntax.self) else {
+    return false
+  }
+  for arg in args {
+    if namesOption(arg.expression, option) {
+      return true
+    }
+    if let array = arg.expression.as(ArrayExprSyntax.self),
+      array.elements.contains(where: { namesOption($0.expression, option) }) {
+      return true
+    }
+  }
+  return false
+}
+
+/// True when the expression is the member access `.<option>` (or `JSOptions.<option>`).
+private func namesOption(_ expression: ExprSyntax, _ option: String) -> Bool {
+  guard let member = expression.as(MemberAccessExprSyntax.self) else {
+    return false
+  }
+  return member.declName.baseName.text == option
+}
+
+/// True if the `@JS`-marked declaration opted into running off the JavaScript thread with
+/// `@JS(.concurrent)`. Such a member is left unstamped and gets `@concurrent` instead, so its body
+/// runs on the concurrent pool rather than inheriting the JS thread.
+internal func isConcurrentJSMember(_ decl: DeclSyntaxProtocol) -> Bool {
+  guard let attribute = memberAttributes(of: decl).firstAttribute(named: "JS") else {
+    return false
+  }
+  return hasJSOption(attribute, named: "concurrent")
+}
+
 /// True if the type is written as an optional: `T?`, `T!`, or the explicit `Optional<T>`. Used to
 /// decide argument requiredness (an optional parameter may be omitted) and record-field nullability.
 internal func isOptionalType(_ type: TypeSyntax) -> Bool {
@@ -156,6 +194,7 @@ internal func memberHasJSAttribute(_ decl: DeclSyntaxProtocol) -> Bool {
 
 /// Decides whether the macro should stamp `@JavaScriptActor` on a `@JS`-marked member.
 /// The macro defers to the user when they've already chosen an isolation:
+/// - the member opted out with `@JS(.concurrent)`
 /// - the `nonisolated` modifier is present on the member
 /// - any attribute whose name matches a known global actor (`@MainActor`, `@JavaScriptActor`)
 ///   or follows the `*Actor` naming convention is present on the member or its enclosing type
@@ -165,6 +204,10 @@ internal func shouldStampJavaScriptActor(
   on member: DeclSyntaxProtocol,
   enclosedBy enclosing: some DeclGroupSyntax
 ) -> Bool {
+  if isConcurrentJSMember(member) {
+    return false
+  }
+
   let modifiers = memberModifiers(of: member)
   if modifiers.contains(where: { $0.name.text == "nonisolated" }) {
     return false

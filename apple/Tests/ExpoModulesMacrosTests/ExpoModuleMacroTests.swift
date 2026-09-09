@@ -15,6 +15,7 @@ private func assertExpansion(
   _ original: String,
   expandedSource expected: String,
   diagnostics: [DiagnosticSpec] = [],
+  fixedSource: String? = nil,
   sourceLocation: Testing.SourceLocation = #_sourceLocation,
   fileID: StaticString = #fileID,
   filePath: StaticString = #filePath,
@@ -26,6 +27,7 @@ private func assertExpansion(
     expandedSource: expected,
     diagnostics: diagnostics,
     macroSpecs: macroSpecs,
+    fixedSource: fixedSource,
     indentationWidth: .spaces(2),
     failureHandler: { spec in
       Issue.record(Comment(rawValue: spec.message), sourceLocation: sourceLocation)
@@ -880,6 +882,239 @@ struct ExpoModuleMacroTests {
             object.defineProperty("status", descriptor: statusDescriptor)
           }
         }
+        """
+    )
+  }
+
+  @Test
+  func `@JS(.concurrent) swaps the @JavaScriptActor stamp for @concurrent`() {
+    assertExpansion(
+      """
+      @ExpoModule
+      final class MyModule: Module {
+        @JS(.concurrent)
+        func load(url: String) async throws -> String { url }
+      }
+      """,
+      expandedSource: """
+        final class MyModule: Module {
+          @concurrent
+          func load(url: String) async throws -> String { url }
+
+          public static let _jsName = "MyModule"
+
+          public func _synthesizedDefinition() -> [AnyDefinition] {
+            return []
+          }
+
+          @JavaScriptActor
+          public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime) throws {
+            object.setProperty("load") { [self] (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
+              guard arguments.count == 1 else {
+                throw Exceptions.ArgumentsRangeMismatch((functionName: "load", received: arguments.count, required: 1, maximum: 1))
+              }
+              let arg0 = try String.decode(arguments.unownedValue(at: 0), in: runtime)
+              return {
+                let result = try await self.load(url: arg0)
+                return try await runtime.execute {
+                  return try String.encode(result, in: runtime)
+                }
+              }
+            }
+          }
+        }
+        """
+    )
+  }
+
+  @Test
+  func `@JS name and options combine, the name still renaming the binding`() {
+    assertExpansion(
+      """
+      @ExpoModule
+      final class MyModule: Module {
+        @JS("loadAsync", [.concurrent])
+        func load(url: String) async throws -> String { url }
+      }
+      """,
+      expandedSource: """
+        final class MyModule: Module {
+          @concurrent
+          func load(url: String) async throws -> String { url }
+
+          public static let _jsName = "MyModule"
+
+          public func _synthesizedDefinition() -> [AnyDefinition] {
+            return []
+          }
+
+          @JavaScriptActor
+          public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime) throws {
+            object.setProperty("loadAsync") { [self] (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
+              guard arguments.count == 1 else {
+                throw Exceptions.ArgumentsRangeMismatch((functionName: "loadAsync", received: arguments.count, required: 1, maximum: 1))
+              }
+              let arg0 = try String.decode(arguments.unownedValue(at: 0), in: runtime)
+              return {
+                let result = try await self.load(url: arg0)
+                return try await runtime.execute {
+                  return try String.encode(result, in: runtime)
+                }
+              }
+            }
+          }
+        }
+        """
+    )
+  }
+
+  @Test
+  func `@JS(.concurrent) on a synchronous function is diagnosed on the attribute`() {
+    assertExpansion(
+      """
+      @ExpoModule
+      final class MyModule: Module {
+        @JS(.concurrent)
+        func compute() -> Int { 42 }
+      }
+      """,
+      expandedSource: """
+        final class MyModule: Module {
+          @concurrent
+          func compute() -> Int { 42 }
+
+          public static let _jsName = "MyModule"
+
+          public func _synthesizedDefinition() -> [AnyDefinition] {
+            return []
+          }
+
+          @JavaScriptActor
+          public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime) throws {
+            object.setProperty("compute") { [self] (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
+              guard arguments.count == 0 else {
+                throw Exceptions.ArgumentsRangeMismatch((functionName: "compute", received: arguments.count, required: 0, maximum: 0))
+              }
+              let result = self.compute()
+              return try Int.encode(result, in: runtime)
+            }
+          }
+        }
+        """,
+      diagnostics: [
+        DiagnosticSpec(
+          message:
+            "'.concurrent' needs an 'async' function: a synchronous @JS member runs on the JavaScript thread by definition. Mark the function 'async' to run its body off that thread.",
+          line: 3,
+          column: 3,
+          severity: .error,
+          fixIts: [FixItSpec(message: "Mark the function 'async'")]
+        )
+      ]
+    )
+  }
+
+  @Test
+  func `@JS(.concurrent) on a throwing synchronous function offers the insert-async fix-it`() {
+    assertExpansion(
+      """
+      @ExpoModule
+      final class MyModule: Module {
+        @JS(.concurrent)
+        func compute() throws -> Int { 42 }
+      }
+      """,
+      expandedSource: """
+        final class MyModule: Module {
+          @concurrent
+          func compute() throws -> Int { 42 }
+
+          public static let _jsName = "MyModule"
+
+          public func _synthesizedDefinition() -> [AnyDefinition] {
+            return []
+          }
+
+          @JavaScriptActor
+          public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime) throws {
+            object.setProperty("compute") { [self] (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
+              guard arguments.count == 0 else {
+                throw Exceptions.ArgumentsRangeMismatch((functionName: "compute", received: arguments.count, required: 0, maximum: 0))
+              }
+              let result = try self.compute()
+              return try Int.encode(result, in: runtime)
+            }
+          }
+        }
+        """,
+      diagnostics: [
+        DiagnosticSpec(
+          message:
+            "'.concurrent' needs an 'async' function: a synchronous @JS member runs on the JavaScript thread by definition. Mark the function 'async' to run its body off that thread.",
+          line: 3,
+          column: 3,
+          severity: .error,
+          fixIts: [FixItSpec(message: "Mark the function 'async'")]
+        )
+      ]
+    )
+  }
+
+  // The two tests below apply the fix-it and check the resulting source. They mark `@JS` on its own
+  // rather than inside an `@ExpoModule` class: `assertMacroExpansion` maps a fix-it back onto the
+  // original source through the node it is anchored to, and for a member that the enclosing
+  // `@ExpoModule` expansion re-emits that mapping lands at the wrong offset. The nested tests above
+  // cover that the fix-it is offered; these cover what it writes.
+  @Test
+  func `The insert-async fix-it marks a synchronous function async`() {
+    assertExpansion(
+      """
+      @JS(.concurrent)
+      func compute() -> Int { 42 }
+      """,
+      expandedSource: """
+        func compute() -> Int { 42 }
+        """,
+      diagnostics: [
+        DiagnosticSpec(
+          message:
+            "'.concurrent' needs an 'async' function: a synchronous @JS member runs on the JavaScript thread by definition. Mark the function 'async' to run its body off that thread.",
+          line: 1,
+          column: 1,
+          severity: .error,
+          fixIts: [FixItSpec(message: "Mark the function 'async'")]
+        )
+      ],
+      fixedSource: """
+        @JS(.concurrent)
+        func compute() async -> Int { 42 }
+        """
+    )
+  }
+
+  @Test
+  func `The insert-async fix-it puts 'async' before an existing 'throws'`() {
+    assertExpansion(
+      """
+      @JS(.concurrent)
+      func compute() throws -> Int { 42 }
+      """,
+      expandedSource: """
+        func compute() throws -> Int { 42 }
+        """,
+      diagnostics: [
+        DiagnosticSpec(
+          message:
+            "'.concurrent' needs an 'async' function: a synchronous @JS member runs on the JavaScript thread by definition. Mark the function 'async' to run its body off that thread.",
+          line: 1,
+          column: 1,
+          severity: .error,
+          fixIts: [FixItSpec(message: "Mark the function 'async'")]
+        )
+      ],
+      fixedSource: """
+        @JS(.concurrent)
+        func compute() async throws -> Int { 42 }
         """
     )
   }

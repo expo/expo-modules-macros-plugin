@@ -32,6 +32,7 @@ public struct JSMacro: PeerMacro {
     in context: some MacroExpansionContext
   ) throws -> [DeclSyntax] {
     diagnoseFreeFormTypes(in: declaration, in: context)
+    diagnoseConcurrentOption(of: node, on: declaration, in: context)
 
     guard let member = boundaryMember(of: declaration),
       let assertion = directionalConformanceAssertion(
@@ -44,6 +45,71 @@ public struct JSMacro: PeerMacro {
     }
     return [assertion]
   }
+}
+
+/// Emits the diagnostic for `@JS(.concurrent)` on a member that can't take it. The option maps to
+/// Swift's `@concurrent`, which requires an `async` function: a synchronous member has nowhere to
+/// suspend, and a property or initializer can't be async at all. Diagnosing here points at the
+/// user's own `@JS` attribute rather than at the `@concurrent` the module macro would attach.
+private func diagnoseConcurrentOption(
+  of node: AttributeSyntax,
+  on declaration: some DeclSyntaxProtocol,
+  in context: some MacroExpansionContext
+) {
+  guard hasJSOption(node, named: "concurrent") else {
+    return
+  }
+  if let funcDecl = declaration.as(FunctionDeclSyntax.self) {
+    guard funcDecl.signature.effectSpecifiers?.asyncSpecifier == nil else {
+      return
+    }
+    context.diagnose(
+      Diagnostic(
+        node: node,
+        message: JSDiagnosticMessage(
+          "'.concurrent' needs an 'async' function: a synchronous @JS member runs on the JavaScript thread by definition. Mark the function 'async' to run its body off that thread.",
+          id: "js-concurrent-requires-async",
+          severity: .error
+        ),
+        fixIts: [insertAsyncFixIt(for: funcDecl)]))
+    return
+  }
+  context.diagnose(
+    Diagnostic(
+      node: node,
+      message: JSDiagnosticMessage(
+        "'.concurrent' applies only to an 'async' @JS function, not to a property or initializer.",
+        id: "js-concurrent-requires-function",
+        severity: .error
+      )))
+}
+
+/// The fix-it offered alongside the synchronous-function diagnostic: insert `async` into the
+/// signature so `@JS(.concurrent)` becomes valid. The macro can't add the keyword itself (no macro
+/// role rewrites the declaration it's attached to), but Xcode can apply this in one click.
+///
+/// `async` goes at the front of the effect specifiers, ahead of any `throws`, which is the only
+/// order Swift accepts. When the signature has no effect specifiers yet, the new clause inherits
+/// what the parameter clause had trailing it and the parameter clause is left with a single space,
+/// so `() -> Int` becomes `() async -> Int` rather than `() async-> Int`.
+private func insertAsyncFixIt(for funcDecl: FunctionDeclSyntax) -> FixIt {
+  let signature = funcDecl.signature
+  var newSignature = signature
+
+  if var effectSpecifiers = signature.effectSpecifiers {
+    effectSpecifiers.asyncSpecifier = .keyword(.async, trailingTrivia: .space)
+    newSignature.effectSpecifiers = effectSpecifiers
+  } else {
+    newSignature.effectSpecifiers = FunctionEffectSpecifiersSyntax(
+      asyncSpecifier: .keyword(.async, trailingTrivia: signature.parameterClause.trailingTrivia)
+    )
+    newSignature.parameterClause.trailingTrivia = .space
+  }
+
+  return FixIt(
+    message: JSFixItMessage("Mark the function 'async'", id: "js-concurrent-insert-async"),
+    changes: [.replace(oldNode: Syntax(signature), newNode: Syntax(newSignature))]
+  )
 }
 
 /// Emits the free-form (`Any` / `[Any]` / `[String: Any]`) diagnostics for a `@JS` declaration.
@@ -152,6 +218,16 @@ private struct JSDiagnosticMessage: DiagnosticMessage {
     self.message = message
     self.diagnosticID = MessageID(domain: "ExpoModulesMacros", id: id)
     self.severity = severity
+  }
+}
+
+private struct JSFixItMessage: FixItMessage {
+  let message: String
+  let fixItID: MessageID
+
+  init(_ message: String, id: String) {
+    self.message = message
+    self.fixItID = MessageID(domain: "ExpoModulesMacros", id: id)
   }
 }
 

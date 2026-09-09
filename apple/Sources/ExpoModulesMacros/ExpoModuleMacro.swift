@@ -151,6 +151,13 @@ extension ExpoModuleMacro: MemberAttributeMacro {
       attributes.append("@JavaScriptActor")
     }
 
+    // `@JS(.concurrent)` is the inverse: instead of the JS-thread stamp the member gets
+    // `@concurrent`, so its body runs on the concurrent pool. `shouldStampJavaScriptActor` already
+    // skipped the stamp above, leaving the two mutually exclusive.
+    if isConcurrentJSMember(member) {
+      attributes.append("@concurrent")
+    }
+
     // Apply the result builder to `definition()` so the user doesn't have to. Skipped if
     // they already wrote `@ModuleDefinitionBuilder` themselves, which would otherwise be
     // a duplicate attribute.
