@@ -70,7 +70,8 @@ private func diagnoseConcurrentOption(
           "'.concurrent' needs an 'async' function: a synchronous @JS member runs on the JavaScript thread by definition. Mark the function 'async' to run its body off that thread.",
           id: "js-concurrent-requires-async",
           severity: .error
-        )))
+        ),
+        fixIts: [insertAsyncFixIt(for: funcDecl)]))
     return
   }
   context.diagnose(
@@ -81,6 +82,34 @@ private func diagnoseConcurrentOption(
         id: "js-concurrent-requires-function",
         severity: .error
       )))
+}
+
+/// The fix-it offered alongside the synchronous-function diagnostic: insert `async` into the
+/// signature so `@JS(.concurrent)` becomes valid. The macro can't add the keyword itself (no macro
+/// role rewrites the declaration it's attached to), but Xcode can apply this in one click.
+///
+/// `async` goes at the front of the effect specifiers, ahead of any `throws`, which is the only
+/// order Swift accepts. When the signature has no effect specifiers yet, the new clause inherits
+/// what the parameter clause had trailing it and the parameter clause is left with a single space,
+/// so `() -> Int` becomes `() async -> Int` rather than `() async-> Int`.
+private func insertAsyncFixIt(for funcDecl: FunctionDeclSyntax) -> FixIt {
+  let signature = funcDecl.signature
+  var newSignature = signature
+
+  if var effectSpecifiers = signature.effectSpecifiers {
+    effectSpecifiers.asyncSpecifier = .keyword(.async, trailingTrivia: .space)
+    newSignature.effectSpecifiers = effectSpecifiers
+  } else {
+    newSignature.effectSpecifiers = FunctionEffectSpecifiersSyntax(
+      asyncSpecifier: .keyword(.async, trailingTrivia: signature.parameterClause.trailingTrivia)
+    )
+    newSignature.parameterClause.trailingTrivia = .space
+  }
+
+  return FixIt(
+    message: JSFixItMessage("Mark the function 'async'", id: "js-concurrent-insert-async"),
+    changes: [.replace(oldNode: Syntax(signature), newNode: Syntax(newSignature))]
+  )
 }
 
 /// Emits the free-form (`Any` / `[Any]` / `[String: Any]`) diagnostics for a `@JS` declaration.
@@ -189,6 +218,16 @@ private struct JSDiagnosticMessage: DiagnosticMessage {
     self.message = message
     self.diagnosticID = MessageID(domain: "ExpoModulesMacros", id: id)
     self.severity = severity
+  }
+}
+
+private struct JSFixItMessage: FixItMessage {
+  let message: String
+  let fixItID: MessageID
+
+  init(_ message: String, id: String) {
+    self.message = message
+    self.fixItID = MessageID(domain: "ExpoModulesMacros", id: id)
   }
 }
 
