@@ -619,6 +619,61 @@ struct ExpoModuleMacroTests {
   }
 
   @Test
+  func `Non-throwing async function awaits the call without try`() {
+    assertExpansion(
+      """
+      @ExpoModule
+      final class MyModule: Module {
+        @JS
+        func performWork() async {}
+
+        @JS
+        func fetchValue(key: String) async -> Int { 0 }
+      }
+      """,
+      expandedSource: """
+        final class MyModule: Module {
+          @JavaScriptActor
+          func performWork() async {}
+          @JavaScriptActor
+          func fetchValue(key: String) async -> Int { 0 }
+
+          public static let _jsName = "MyModule"
+
+          public func _synthesizedDefinition() -> [AnyDefinition] {
+            return []
+          }
+
+          @JavaScriptActor
+          public func _decorateModule(object: borrowing JavaScriptObject, in runtime: JavaScriptRuntime) throws {
+            object.setProperty("performWork") { [self] (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
+              guard arguments.count == 0 else {
+                throw Exceptions.ArgumentsRangeMismatch((functionName: "performWork", received: arguments.count, required: 0, maximum: 0))
+              }
+              return {
+                await self.performWork()
+                return .undefined
+              }
+            }
+            object.setProperty("fetchValue") { [self] (this: borrowing JavaScriptUnownedValue, arguments: consuming JavaScriptValuesBuffer) in
+              guard arguments.count == 1 else {
+                throw Exceptions.ArgumentsRangeMismatch((functionName: "fetchValue", received: arguments.count, required: 1, maximum: 1))
+              }
+              let arg0 = try String.decode(arguments.unownedValue(at: 0), in: runtime)
+              return {
+                let result = await self.fetchValue(key: arg0)
+                return try await runtime.execute {
+                  return try Int.encode(result, in: runtime)
+                }
+              }
+            }
+          }
+        }
+        """
+    )
+  }
+
+  @Test
   func `Async function with a trailing optional parameter returns a body per accepted arity`() {
     assertExpansion(
       """

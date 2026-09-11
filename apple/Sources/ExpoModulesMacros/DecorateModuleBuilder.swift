@@ -192,7 +192,9 @@ internal struct JSFunction {
       }
       callArguments.append(label == "_" ? value : "\(label): \(value)")
     }
-    let tryKeyword = (isThrowing || isAsync) ? "try " : ""
+    // `try` only for a throwing function. An `async` call that doesn't throw must not get one, or the
+    // expansion warns that no throwing call occurs within the `try` expression.
+    let tryKeyword = isThrowing ? "try " : ""
     let awaitKeyword = isAsync ? "await " : ""
     return "\(tryKeyword)\(awaitKeyword)\(receiver.callee).\(swiftName)(\(callArguments.joined(separator: ", ")))"
   }

@@ -889,7 +889,7 @@ struct ExpoModuleClassesTests {
                 throw Exceptions.ArgumentsRangeMismatch((functionName: "fetch", received: arguments.count, required: 0, maximum: 0))
               }
               return {
-                let result = try await _self.fetch()
+                let result = await _self.fetch()
                 return try await runtime.execute {
                   return try Int.encode(result, in: runtime)
                 }
