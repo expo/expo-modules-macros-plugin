@@ -81,7 +81,9 @@ Each path is a `.swift` file or a directory, scanned recursively for `.swift` fi
 -Xfrontend -load-plugin-executable -Xfrontend <plugin>/apple/ExpoModulesMacros-tool#ExpoModulesMacros
 ```
 
-to `OTHER_SWIFT_FLAGS` for `ExpoModulesCore`, every pod that depends on it, and their test specs. The module and type names in `#externalMacro` must stay in sync with `apple/Sources/ExpoModulesMacros/Plugin.swift`.
+to `OTHER_SWIFT_FLAGS` for `ExpoModulesCore`, every pod that depends on it, and their test specs. Expo's SPM prebuilds pass the same flag when they generate `Package.swift`, so both build systems load the same binary.
+
+The module and type names in `#externalMacro` must stay in sync with `apple/Sources/ExpoModulesMacros/Plugin.swift`.
 
 # Development
 
