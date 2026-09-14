@@ -1828,4 +1828,73 @@ struct ExpoModuleMacroTests {
       ]
     )
   }
+
+  @Test
+  func `views: registers view classes by type`() {
+    assertExpansion(
+      """
+      @ExpoModule(views: [CardView.self, BadgeView.self])
+      class MyModule: Module {
+      }
+      """,
+      expandedSource: """
+        class MyModule: Module {
+
+          public static let _jsName = "MyModule"
+
+          public static let _viewTypes: [Any.Type] = [CardView.self, BadgeView.self]
+
+          public func _synthesizedDefinition() -> [AnyDefinition] {
+            return []
+          }
+        }
+        """
+    )
+  }
+
+  @Test
+  func `views: combines with classes:`() {
+    assertExpansion(
+      """
+      @ExpoModule(classes: [Cache.self], views: [CardView.self])
+      class MyModule: Module {
+      }
+      """,
+      expandedSource: """
+        class MyModule: Module {
+
+          public static let _jsName = "MyModule"
+
+          public static let _viewTypes: [Any.Type] = [CardView.self]
+
+          public func _synthesizedDefinition() -> [AnyDefinition] {
+            return [
+              Cache._synthesizedClassDefinition()
+            ]
+          }
+        }
+        """
+    )
+  }
+
+  @Test
+  func `No views: argument emits no _viewTypes`() {
+    assertExpansion(
+      """
+      @ExpoModule
+      class MyModule: Module {
+      }
+      """,
+      expandedSource: """
+        class MyModule: Module {
+
+          public static let _jsName = "MyModule"
+
+          public func _synthesizedDefinition() -> [AnyDefinition] {
+            return []
+          }
+        }
+        """
+    )
+  }
 }
