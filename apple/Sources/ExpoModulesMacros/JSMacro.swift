@@ -3,8 +3,8 @@ import SwiftSyntax
 import SwiftSyntaxMacros
 
 /// Marker macro applied to module / shared-object members that should be exposed to JavaScript.
-/// `@ExpoModule` and `@SharedObject` discover declarations carrying this attribute and generate the
-/// corresponding `Function` / `AsyncFunction` / `Property` / `Constructor` registrations; that part
+/// `@ExpoModule` and `@SharedObject` discover declarations carrying this attribute and bind each one
+/// directly into the JS object, with the decode-call-encode body inlined into the binding; that part
 /// of the expansion lives in those macros.
 ///
 /// On its own, `@JS` emits one thing: a never-called peer that asserts each type crossing the JS
