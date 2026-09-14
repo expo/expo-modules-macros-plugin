@@ -1,3 +1,4 @@
+import Foundation
 import SwiftDiagnostics
 import SwiftSyntax
 import SwiftSyntaxBuilder
@@ -131,10 +132,18 @@ private let maxValueProps = 64
 
 /// One stored property of the props type, classified as a value prop or an event.
 private struct ViewProp {
+  /// The property name as written, backticks included for an escaped name. Every identifier position
+  /// in the generated code uses this, since `case default` and `static let default` don't parse.
   let name: String
   /// The property's declared type, verbatim. Retained for the decode surface, which lands with the
   /// core props contract.
   let type: String
+
+  /// The name with any escaping backticks removed: the JS-visible key, so the enum's raw value and
+  /// `_eventNames` both read `"default"`, never `` "`default`" ``.
+  var wireName: String {
+    return name.trimmingCharacters(in: CharacterSet(charactersIn: "`"))
+  }
 }
 
 private struct ViewPropsModel {
@@ -153,9 +162,17 @@ private struct ViewPropsModel {
  function type, a property with no determinable type, and more than 64 value props.
  */
 private func validatedViewProps(of declaration: some DeclGroupSyntax) throws -> ViewPropsModel {
-  guard declaration.is(StructDeclSyntax.self) else {
+  guard let structDecl = declaration.as(StructDeclSyntax.self) else {
     throw MacroExpansionErrorMessage(
       "@ViewProps can only be applied to a struct — the class form (for SwiftUI views) is not supported yet"
+    )
+  }
+  // A generic props type can't work: the synthesized extension would have to repeat the generic
+  // parameter list and its constraints, and core reaches the props type through a view's static
+  // `Props` typealias, which names one concrete type.
+  if structDecl.genericParameterClause != nil {
+    throw MacroExpansionErrorMessage(
+      "@ViewProps does not support generic types — a view's props type must be concrete"
     )
   }
 
@@ -179,13 +196,25 @@ private func validatedViewProps(of declaration: some DeclGroupSyntax) throws -> 
     }
 
     for binding in varDecl.bindings {
-      // Computed properties (and `{ get set }`) carry an accessor block — never stored props.
-      if binding.accessorBlock != nil {
+      // A computed property is never a prop, but an accessor block alone doesn't mean computed:
+      // `willSet`/`didSet` observers imply stored storage. `bindingIsSettable` draws exactly that
+      // line, so a stored property with observers stays part of the surface.
+      if binding.accessorBlock != nil && !bindingIsSettable(binding) {
         continue
       }
+      // A tuple-destructuring binding (`var (a, b) = (1, 2)`) has no single name to key a prop on,
+      // and silently dropping it would leave the props type missing fields the author declared.
       guard let ident = binding.pattern.as(IdentifierPatternSyntax.self) else {
+        if binding.pattern.is(TuplePatternSyntax.self) {
+          throw MacroExpansionErrorMessage(
+            "@ViewProps does not support tuple-destructuring properties — declare each prop separately"
+          )
+        }
         continue
       }
+      // An escaped name (`` var `default`: Int ``) needs both spellings: `identifier.text` keeps the
+      // backticks, which every identifier position requires (`case \`default\``), while the wire key
+      // and `_eventNames` need the bare name.
       let name = ident.identifier.text
 
       // Prefer the explicit annotation. When it's omitted, recover the type from a literal default
@@ -210,6 +239,14 @@ private func validatedViewProps(of declaration: some DeclGroupSyntax) throws -> 
       }
 
       let isEvent = declaredType.map { underlyingFunctionType(of: $0) != nil } ?? false
+      // `PropSet` stores its mask in `rawValue`, so a value prop of that name would emit a static
+      // member shadowing it and the option set would not compile ("circular reference"). The error
+      // would point at generated code, so catch it here and name the property.
+      if !isEvent && name.trimmingCharacters(in: CharacterSet(charactersIn: "`")) == "rawValue" {
+        throw MacroExpansionErrorMessage(
+          "'rawValue' can't be used as a prop name — it collides with the synthesized PropSet's storage. Rename the property"
+        )
+      }
       let prop = ViewProp(name: name, type: resolvedType)
       if isEvent {
         eventProps.append(prop)
@@ -221,7 +258,7 @@ private func validatedViewProps(of declaration: some DeclGroupSyntax) throws -> 
 
   guard valueProps.count <= maxValueProps else {
     throw MacroExpansionErrorMessage(
-      "@ViewProps supports at most \(maxValueProps) value props (the changed-props mask is a UInt64); '\(valueProps[maxValueProps].name)' is number \(valueProps.count). Event props don't count toward the limit"
+      "@ViewProps supports at most \(maxValueProps) value props (the changed-props mask is a UInt64), but this type declares \(valueProps.count); '\(valueProps[maxValueProps].name)' is the first over the limit. Event props don't count toward it"
     )
   }
   return ViewPropsModel(valueProps: valueProps, eventProps: eventProps)
@@ -248,6 +285,15 @@ private func underlyingFunctionType(of type: TypeSyntax) -> FunctionTypeSyntax? 
   if let implicitlyUnwrapped = type.as(ImplicitlyUnwrappedOptionalTypeSyntax.self) {
     return underlyingFunctionType(of: implicitlyUnwrapped.wrappedType)
   }
+  // The long spelling of an optional: `Optional<() -> Void>` has to reach the same diagnostic as
+  // `(() -> Void)?` and `(() -> Void)!`, or the same declaration would be an event in one spelling
+  // and a value prop in another.
+  if let identifier = type.as(IdentifierTypeSyntax.self),
+    identifier.name.text == "Optional",
+    let argument = identifier.genericArgumentClause?.arguments.first,
+    case .type(let wrapped) = argument.argument {
+    return underlyingFunctionType(of: wrapped)
+  }
   return nil
 }
 
@@ -259,7 +305,15 @@ private func underlyingFunctionType(of type: TypeSyntax) -> FunctionTypeSyntax? 
  satisfied), so a props type with only events still conforms.
  */
 private func propNameEnum(valueProps: [ViewProp]) -> DeclSyntax {
-  let cases = valueProps.map { "  case \($0.name)" }.joined(separator: "\n")
+  // An escaped case takes its raw value from the bare identifier already, but spelling it out keeps
+  // the wire key visible in the generated source and independent of that implicit rule.
+  let cases = valueProps
+    .map { prop in
+      prop.name == prop.wireName
+        ? "  case \(prop.name)"
+        : "  case \(prop.name) = \"\(prop.wireName)\""
+    }
+    .joined(separator: "\n")
   if valueProps.isEmpty {
     return """
       public enum PropName: String, CaseIterable {
@@ -315,7 +369,7 @@ private func propSetStruct(valueProps: [ViewProp]) -> DeclSyntax {
  the `on` prefix.
  */
 private func eventNamesConstant(eventProps: [ViewProp]) -> DeclSyntax {
-  let names = eventProps.map { "\"\($0.name)\"" }.joined(separator: ", ")
+  let names = eventProps.map { "\"\($0.wireName)\"" }.joined(separator: ", ")
   return """
     public static let _eventNames: [String] = [\(raw: names)]
     """
