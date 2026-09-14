@@ -88,6 +88,16 @@ public struct ExpoModuleMacro: MemberMacro {
     // JS object name, so they can't diverge.
     emitted.append("public static let _jsName = \"\(raw: moduleName)\"")
 
+    // View classes are registered by type, not spliced as definitions: an `@ExpoView` emits no
+    // definition function, so there is nothing to call on each entry. Core reads a view's props
+    // type from its `Props` typealias and its event names from that type's `_eventNames`, both
+    // static. Emitted only when the argument is present, so a module without views gains nothing.
+    let viewTypes = classListArgument(of: node, label: "views")
+    if !viewTypes.isEmpty {
+      let entries = viewTypes.map { "\($0).self" }.joined(separator: ", ")
+      emitted.append("public static let _viewTypes: [Any.Type] = [\(raw: entries)]")
+    }
+
     // `Module`/`BaseModule` already provide `appContext` storage and the
     // `init(appContext:)` requirement, so we only synthesize them for classes that
     // inherit from neither. Each is skipped individually if the user wrote their own,
