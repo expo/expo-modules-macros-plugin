@@ -370,6 +370,21 @@ internal func bindingIsSettable(_ binding: PatternBindingSyntax) -> Bool {
   }
 }
 
+/// True if the variable declaration carries a modifier that excludes it from being a stored property
+/// of the surface: `static`, `class` (type-level storage), `private`, `fileprivate`, or `lazy`.
+/// Shared by `@Record` and `@ViewProps`, which apply the same "every stored property counts" rule.
+internal func isExcludedByModifier(_ modifiers: DeclModifierListSyntax) -> Bool {
+  for modifier in modifiers {
+    switch modifier.name.tokenKind {
+    case .keyword(.static), .keyword(.class), .keyword(.private), .keyword(.fileprivate), .keyword(.lazy):
+      return true
+    default:
+      continue
+    }
+  }
+  return false
+}
+
 /// True if the type's inheritance clause already lists a protocol with the given name. Matches
 /// either the bare identifier (`Record`) or a qualified member access ending in the name
 /// (`ExpoModulesCore.Record`). Used by the extension macros to skip a conformance the author already
