@@ -463,22 +463,6 @@ private func initializerParameterLabels(of declaration: some DeclGroupSyntax) ->
 }
 
 /**
- True if the variable declaration carries a modifier that excludes it from being a property:
- `static`, `class` (type-level storage), `private`, `fileprivate`, or `lazy`.
- */
-private func isExcludedByModifier(_ modifiers: DeclModifierListSyntax) -> Bool {
-  for modifier in modifiers {
-    switch modifier.name.tokenKind {
-    case .keyword(.static), .keyword(.class), .keyword(.private), .keyword(.fileprivate), .keyword(.lazy):
-      return true
-    default:
-      continue
-    }
-  }
-  return false
-}
-
-/**
  True if the class declaration has any inheritance clause. Used as a heuristic for
  whether the superclass also conforms to `Record` and provides the synthesized methods;
  the macro emits `override` in this case.
