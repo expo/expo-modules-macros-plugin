@@ -13,6 +13,7 @@ struct ExpoModulesMacrosPlugin: CompilerPlugin {
     RecordMacro.self,
     UnionMacro.self,
     ViewPropsMacro.self,
+    ExpoViewMacro.self,
   ]
 }
 
