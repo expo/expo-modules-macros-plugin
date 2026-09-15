@@ -85,9 +85,13 @@ public struct ViewPropsMacro: MemberMacro, ExtensionMacro {
     }
     let alreadyConforms = inheritsProtocol(named: viewPropsProtocolName, in: declaration)
 
-    let allProps = props.valueProps.isEmpty
-      ? "[]"
-      : "[" + props.valueProps.map { ".\($0.name)" }.joined(separator: ", ") + "]"
+    // `allProps` is read on every first application of props, once per view instance, so it's a
+    // stored constant with the mask already folded rather than a computed property rebuilding an
+    // array literal per call. The macro knows the bit count, so the literal is exact: n props
+    // occupy bits 0..<n, which is the low n bits set.
+    let allPropsMask = props.valueProps.isEmpty
+      ? "0"
+      : "0b" + String(repeating: "1", count: props.valueProps.count)
 
     // With no value prop there's nothing to switch over, and an empty `switch` over an uninhabited
     // enum doesn't compile — return the empty set instead.
@@ -104,10 +108,11 @@ public struct ViewPropsMacro: MemberMacro, ExtensionMacro {
     let conformanceClause = alreadyConforms ? "" : ": \(viewPropsProtocolName)"
     let ext: DeclSyntax = """
       extension \(type.trimmed)\(raw: conformanceClause) {
-        public static var allProps: PropSet {
-          return \(raw: allProps)
-        }
+        public static let allProps = PropSet(rawValue: \(raw: allPropsMask))
 
+        /// `@inlinable` so core's raw-key fold can inline the lookup across the module boundary:
+        /// it runs once per changed key per props batch.
+        @inlinable
         public static func propSet(for name: PropName) -> PropSet {
       \(raw: propSetBody)
         }
