@@ -68,12 +68,31 @@ export function getScannerBinaryPath(): string {
  *
  * Paths are passed after the options. The CLI has no `--` separator, so a path spelled exactly
  * `--define` would be read as that option instead; such a path isn't representable and the scan
- * fails with a usage error rather than scanning the wrong thing.
+ * fails with a usage error rather than scanning the wrong thing. `-h`/`--help` are worse, since the
+ * CLI answers them from anywhere in argv by printing usage and exiting 0, which would surface as an
+ * opaque parse failure. `assertRepresentablePaths` rejects those before spawning.
  *
  * Output is buffered rather than streamed: the report is only usable once complete. Scanning all of
  * `expo/packages` produces ~17 KB, so the raised `maxBuffer` is headroom for a far larger tree
  * rather than a limit anything is expected to approach.
  */
+/**
+ * Rejects paths the CLI can't receive as paths. `-h`/`--help` are recognized anywhere in argv, so
+ * passing one as a path prints usage and exits 0: the scan never runs, and without this the caller
+ * would see a JSON parse failure pointing at the wrong cause.
+ */
+function assertRepresentablePaths(command: string, paths: string[]): void {
+  const helpFlag = paths.find((candidate) => candidate === '-h' || candidate === '--help');
+  if (helpFlag !== undefined) {
+    throw new TypeError(
+      `${command} cannot scan a path named \`${helpFlag}\`: the scanner reads it as a help ` +
+        'request. Pass a path that resolves to the same file, such as `./' +
+        helpFlag +
+        '`.'
+    );
+  }
+}
+
 function runScanner<T>(binaryPath: string, args: string[]): Promise<T> {
   return new Promise((resolve, reject) => {
     execFile(
@@ -135,6 +154,7 @@ export async function scanModules(
   if (paths.length === 0) {
     throw new TypeError('scanModules requires at least one path');
   }
+  assertRepresentablePaths('scanModules', paths);
 
   const args = ['scan-modules'];
   for (const define of options.defines ?? []) {
@@ -171,6 +191,7 @@ export async function scanExports(
   if (paths.length === 0) {
     throw new TypeError('scanExports requires at least one path');
   }
+  assertRepresentablePaths('scanExports', paths);
 
   const result = await runScanner<ScanExportsResult>(options.binaryPath ?? getScannerBinaryPath(), [
     'scan-exports',

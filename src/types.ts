@@ -18,12 +18,14 @@ export type JSType =
 /**
  * A boundary type as a tagged tree, mirroring `TypeNode`. Discriminate on `kind`.
  *
- * Every node carries `typeof` except `unknown`, whose category can't be determined. The absent
- * (`undefined`) case is carried by the `optional` wrapper itself rather than by its wrapped node.
+ * `unknown` carries no `typeof`, and an `optional` reports its *wrapped* node's category, so
+ * `(Int, String)?` (an optional around an unknown) has none either. Every other node always has one.
+ * The absent (`undefined`) case is carried by the `optional` wrapper itself rather than by its
+ * wrapped node.
  */
 export type TypeNode =
   | { kind: 'primitive'; typeof: JSType; name: string }
-  | { kind: 'optional'; typeof: JSType; wrapped: TypeNode }
+  | { kind: 'optional'; typeof?: JSType; wrapped: TypeNode }
   | { kind: 'array'; typeof: JSType; element: TypeNode }
   | { kind: 'dictionary'; typeof: JSType; key: TypeNode; value: TypeNode }
   | { kind: 'promise'; typeof: JSType; value: TypeNode }
