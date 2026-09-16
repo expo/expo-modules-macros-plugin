@@ -135,10 +135,17 @@ internal func classListArgument(of attribute: AttributeSyntax, label: String) ->
     return array.elements.compactMap { element -> String? in
       guard let memberAccess = element.expression.as(MemberAccessExprSyntax.self),
         memberAccess.declName.baseName.text == "self",
-        let base = memberAccess.base?.as(DeclReferenceExprSyntax.self) else {
+        let base = memberAccess.base else {
         return nil
       }
-      return base.baseName.text
+      // A bare `CardView.self` has a `DeclReferenceExprSyntax` base; a qualified
+      // `Outer.CardView.self` has a `MemberAccessExprSyntax` one. Both name a type the generated
+      // code can spell, so take the base verbatim rather than only its last component: dropping the
+      // qualified form would silently omit the entry, and the type would never be registered.
+      if base.is(DeclReferenceExprSyntax.self) || base.is(MemberAccessExprSyntax.self) {
+        return base.trimmedDescription
+      }
+      return nil
     }
   }
   return []

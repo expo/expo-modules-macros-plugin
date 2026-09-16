@@ -205,4 +205,102 @@ struct ExpoViewMacroTests {
       ]
     )
   }
+
+  @Test
+  func `A generic view class produces a diagnostic`() {
+    // It would expand fine but could never be registered: `[CardView.self]` on a generic type
+    // fails with "generic parameter 'T' could not be inferred".
+    assertExpansion(
+      """
+      @ExpoView<CardProps>
+      class CardView<T>: ExpoView {
+      }
+      """,
+      expandedSource: """
+        class CardView<T>: ExpoView {
+        }
+        """,
+      diagnostics: [
+        DiagnosticSpec(
+          message: "@ExpoView does not support generic classes — a view registered with @ExpoModule(views:) must be concrete",
+          line: 1,
+          column: 1
+        )
+      ]
+    )
+  }
+
+  @Test
+  func `An existing Props typealias produces a diagnostic`() {
+    assertExpansion(
+      """
+      @ExpoView<CardProps>
+      class CardView: ExpoView {
+        typealias Props = Something
+      }
+      """,
+      expandedSource: """
+        class CardView: ExpoView {
+          typealias Props = Something
+        }
+        """,
+      diagnostics: [
+        DiagnosticSpec(
+          message: "@ExpoView synthesizes a `Props` typealias, but this class already declares a typealias named 'Props'. Rename it",
+          line: 1,
+          column: 1
+        )
+      ]
+    )
+  }
+
+  @Test
+  func `A nested type named Props produces a diagnostic`() {
+    assertExpansion(
+      """
+      @ExpoView<CardProps>
+      class CardView: ExpoView {
+        struct Props {
+        }
+      }
+      """,
+      expandedSource: """
+        class CardView: ExpoView {
+          struct Props {
+          }
+        }
+        """,
+      diagnostics: [
+        DiagnosticSpec(
+          message: "@ExpoView synthesizes a `Props` typealias, but this class already declares a struct named 'Props'. Rename it",
+          line: 1,
+          column: 1
+        )
+      ]
+    )
+  }
+
+  @Test
+  func `A class inheriting indirectly is rejected`() {
+    // A syntactic macro can't resolve `BaseCardView` to see that it is an ExpoView, so the check
+    // matches the class's own inheritance clause only. `@SharedObject` behaves the same way.
+    assertExpansion(
+      """
+      @ExpoView<CardProps>
+      class CardView: BaseCardView {
+      }
+      """,
+      expandedSource: """
+        class CardView: BaseCardView {
+        }
+        """,
+      diagnostics: [
+        DiagnosticSpec(
+          message: "@ExpoView class must inherit from ExpoView. Add `: ExpoView` to the class declaration.",
+          line: 1,
+          column: 1
+        )
+      ]
+    )
+  }
 }

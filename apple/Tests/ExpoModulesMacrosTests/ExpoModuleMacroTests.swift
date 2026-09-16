@@ -1897,4 +1897,50 @@ struct ExpoModuleMacroTests {
         """
     )
   }
+
+  @Test
+  func `A qualified type in views: is registered, not dropped`() {
+    // The base of `Outer.CardView.self` is a member access, not a bare name. Skipping it would
+    // emit no _viewTypes at all and silently never register the view.
+    assertExpansion(
+      """
+      @ExpoModule(views: [Outer.CardView.self])
+      class MyModule: Module {
+      }
+      """,
+      expandedSource: """
+        class MyModule: Module {
+
+          public static let _jsName = "MyModule"
+
+          public static let _viewTypes: [Any.Type] = [Outer.CardView.self]
+
+          public func _synthesizedDefinition() -> [AnyDefinition] {
+            return []
+          }
+        }
+        """
+    )
+  }
+
+  @Test
+  func `An explicitly empty views: list emits no _viewTypes`() {
+    assertExpansion(
+      """
+      @ExpoModule(views: [])
+      class MyModule: Module {
+      }
+      """,
+      expandedSource: """
+        class MyModule: Module {
+
+          public static let _jsName = "MyModule"
+
+          public func _synthesizedDefinition() -> [AnyDefinition] {
+            return []
+          }
+        }
+        """
+    )
+  }
 }
