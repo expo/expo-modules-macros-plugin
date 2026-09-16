@@ -81,6 +81,10 @@ jobs:
         run: swift package resolve
         working-directory: apple
 
+      - name: Install dependencies
+        # The wrapper's `prepublishOnly` build needs `tsc`; the tool binary needs none.
+        run: npm install
+
       - name: Build release tool
         # Runs apple/build.js: builds the release plugin binary,
         # copies it to apple/ExpoModulesMacros-tool, and strips it.

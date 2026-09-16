@@ -178,9 +178,16 @@ struct ExportedSurface: Encodable, Equatable {
   let records: [ExportedRecord]
 }
 
+/// Version of the `scan-exports` output shape. Bumped on any breaking change to the envelope or to
+/// anything under `exports`, so a consumer can verify it understands the output before trusting it.
+/// Versioned independently of `scanModulesSchemaVersion`: the two commands serve different consumers
+/// and change for different reasons.
+let scanExportsSchemaVersion = 1
+
 /// The `scan-exports` result: the surface plus the run's stats. A distinct envelope from
 /// `ScanModulesResult` (different consumer: TS generation vs. autolinking).
 struct ScanExportsResult: Encodable, Equatable {
+  let schemaVersion: Int
   let exports: ExportedSurface
   let stats: ScanStats
 }

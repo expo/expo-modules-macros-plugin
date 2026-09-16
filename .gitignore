@@ -1,3 +1,6 @@
 .claude
 apple/.build
 apple/.swiftpm
+build
+node_modules
+package-lock.json

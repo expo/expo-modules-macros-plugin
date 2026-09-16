@@ -3,3 +3,8 @@
 
 /apple/.build/**/*
 /apple/Tests/**/*
+
+# The TypeScript wrapper ships compiled, from /build.
+/src/**/*
+/tsconfig.json
+/node_modules/**/*
