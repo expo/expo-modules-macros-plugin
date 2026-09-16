@@ -81,10 +81,18 @@ jobs:
         run: swift package resolve
         working-directory: apple
 
+      - name: Install dependencies
+        # Needed for the TypeScript wrapper's build; the tool binary needs none.
+        run: npm install
+
       - name: Build release tool
         # Runs apple/build.js: builds the release plugin binary,
         # copies it to apple/ExpoModulesMacros-tool, and strips it.
         run: npm run build
+
+      - name: Build TypeScript wrapper
+        # Compiles src/ to build/, which package.json's main/types point at.
+        run: npm run build:ts
 
       - name: Publish
         # Authentication is handled via OIDC trusted publishing — no token needed.

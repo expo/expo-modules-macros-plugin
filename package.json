@@ -15,8 +15,7 @@
     "build": "node apple/build.js",
     "build:ts": "tsc -p tsconfig.json",
     "clean": "rm -rf build",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "prepublishOnly": "npm run build:ts"
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",

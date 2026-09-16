@@ -60,3 +60,9 @@ jobs:
 
       - name: Test
         run: swift test -v
+
+      - name: Typecheck the TypeScript wrapper
+        working-directory: ${{ github.workspace }}
+        run: |
+          npm install
+          npm run typecheck

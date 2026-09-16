@@ -1,5 +1,4 @@
 import { execFile } from 'node:child_process';
-import fs from 'node:fs';
 import path from 'node:path';
 
 import {
@@ -73,29 +72,35 @@ export function getScannerBinaryPath(): string {
 /**
  * Runs a scanner subcommand and parses its JSON report.
  *
- * The scan is CPU-bound in Swift and can emit a large report, so stdout is buffered with a raised
- * `maxBuffer` rather than streamed: the report is only usable once complete anyway.
+ * Paths are passed after the options. The CLI has no `--` separator, so a path spelled exactly
+ * `--platform` or `--define` would be read as that option instead; such a path isn't representable
+ * and the scan fails with a usage error rather than scanning the wrong thing.
+ *
+ * Output is buffered rather than streamed: the report is only usable once complete. Scanning all of
+ * `expo/packages` produces ~17 KB, so the raised `maxBuffer` is headroom for a far larger tree
+ * rather than a limit anything is expected to approach.
  */
 function runScanner<T>(binaryPath: string, args: string[]): Promise<T> {
   return new Promise((resolve, reject) => {
-    if (!fs.existsSync(binaryPath)) {
-      reject(
-        new ScannerError(
-          `The scanner binary is missing at ${binaryPath}. Run \`npm run build\` in this package to build it.`,
-          null,
-          ''
-        )
-      );
-      return;
-    }
-
     execFile(
       binaryPath,
       args,
-      { maxBuffer: 256 * 1024 * 1024, encoding: 'utf8' },
+      { maxBuffer: 64 * 1024 * 1024, encoding: 'utf8' },
       (error, stdout, stderr) => {
         if (error) {
+          // A spawn failure reports a string `code` (e.g. 'ENOENT'); a non-zero exit reports a
+          // number. Only the latter is an exit status.
           const exitCode = typeof error.code === 'number' ? error.code : null;
+          if (error.code === 'ENOENT') {
+            reject(
+              new ScannerError(
+                `The scanner binary is missing at ${binaryPath}. Run \`npm run build\` in this package to build it.`,
+                null,
+                stderr
+              )
+            );
+            return;
+          }
           reject(
             new ScannerError(
               `\`${path.basename(binaryPath)} ${args.join(' ')}\` failed: ${stderr.trim() || error.message}`,
@@ -112,7 +117,7 @@ function runScanner<T>(binaryPath: string, args: string[]): Promise<T> {
           reject(
             new ScannerError(
               `Could not parse the scanner's JSON output: ${(parseError as Error).message}`,
-              0,
+              null,
               stderr
             )
           );
