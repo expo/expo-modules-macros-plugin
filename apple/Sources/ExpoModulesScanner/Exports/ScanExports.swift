@@ -41,6 +41,7 @@ func scanExports(paths: [String]) -> ScanExportsResult {
   }
 
   return ScanExportsResult(
+    schemaVersion: scanExportsSchemaVersion,
     exports: ExportedSurface(modules: modules, sharedObjects: sharedObjects, records: records),
     stats: stats
   )

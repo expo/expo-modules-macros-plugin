@@ -258,6 +258,7 @@ struct ScanExportsTests {
       #expect(result.exports.records.map(\.name) == ["R"])
       // Reported paths are absolute.
       #expect(result.exports.modules.first?.file.hasPrefix("/") == true)
+      #expect(result.schemaVersion == scanExportsSchemaVersion)
       // All four files are read; the plain one (no macro) isn't parsed.
       #expect(result.stats.filesScanned == 4)
       #expect(result.stats.filesParsed == 3)
