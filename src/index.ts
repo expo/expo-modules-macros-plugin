@@ -12,12 +12,6 @@ export * from './types';
 
 /** Options accepted by `scanModules`, mirroring the CLI's `scan-modules` flags. */
 export interface ScanModulesOptions {
-  /**
-   * Evaluate `#if os(...)` against this platform (`iOS`, `macOS`, `tvOS`, ...). Without it,
-   * os-conditional declarations are skipped and reported in the result's `warnings`.
-   */
-  platform?: string;
-
   /** Conditional compilation flags to treat as set, e.g. `['DEBUG']`. */
   defines?: string[];
 
@@ -73,8 +67,8 @@ export function getScannerBinaryPath(): string {
  * Runs a scanner subcommand and parses its JSON report.
  *
  * Paths are passed after the options. The CLI has no `--` separator, so a path spelled exactly
- * `--platform` or `--define` would be read as that option instead; such a path isn't representable
- * and the scan fails with a usage error rather than scanning the wrong thing.
+ * `--define` would be read as that option instead; such a path isn't representable and the scan
+ * fails with a usage error rather than scanning the wrong thing.
  *
  * Output is buffered rather than streamed: the report is only usable once complete. Scanning all of
  * `expo/packages` produces ~17 KB, so the raised `maxBuffer` is headroom for a far larger tree
@@ -143,9 +137,6 @@ export async function scanModules(
   }
 
   const args = ['scan-modules'];
-  if (options.platform) {
-    args.push('--platform', options.platform);
-  }
   for (const define of options.defines ?? []) {
     args.push('--define', define);
   }
@@ -170,8 +161,8 @@ export async function scanModules(
  * Deep scan of the full JS-exported surface, for TypeScript type generation. Each path is a `.swift`
  * file or a directory, scanned recursively.
  *
- * Unlike `scanModules`, this doesn't evaluate `#if` blocks, so it takes no platform or define
- * options: conditional declarations are reported as if their conditions held.
+ * Unlike `scanModules`, this doesn't evaluate `#if` blocks, so it takes no define option:
+ * conditional declarations are reported as if their conditions held.
  */
 export async function scanExports(
   paths: string[],

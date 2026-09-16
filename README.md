@@ -80,7 +80,7 @@ Node consumers can call the scanner through this package instead of locating the
 ```ts
 import { scanModules, scanExports } from '@expo/expo-modules-macros-plugin';
 
-const { modules, warnings } = await scanModules(['ios/'], { platform: 'iOS' });
+const { modules, warnings } = await scanModules(['ios/'], { defines: ['DEBUG'] });
 const { exports } = await scanExports(['ios/']);
 ```
 
