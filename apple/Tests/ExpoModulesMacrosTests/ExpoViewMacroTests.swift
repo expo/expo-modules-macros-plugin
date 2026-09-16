@@ -150,10 +150,11 @@ struct ExpoViewMacroTests {
         }
         """,
       diagnostics: [
+        // No fix-it: replacing a superclass the author chose isn't an edit the macro can make.
         DiagnosticSpec(
           message: "@ExpoView class must inherit from ExpoView. Add `: ExpoView` to the class declaration.",
-          line: 1,
-          column: 1
+          line: 2,
+          column: 7
         )
       ]
     )
@@ -174,10 +175,17 @@ struct ExpoViewMacroTests {
       diagnostics: [
         DiagnosticSpec(
           message: "@ExpoView class must inherit from ExpoView. Add `: ExpoView` to the class declaration.",
-          line: 1,
-          column: 1
+          line: 2,
+          column: 7,
+          fixIts: [FixItSpec(message: "Inherit from 'ExpoView'")]
         )
-      ]
+      ],
+      applyFixIts: ["Inherit from 'ExpoView'"],
+      fixedSource: """
+        @ExpoView<CardProps>
+        class CardView: ExpoView {
+        }
+        """
     )
   }
 
@@ -297,8 +305,8 @@ struct ExpoViewMacroTests {
       diagnostics: [
         DiagnosticSpec(
           message: "@ExpoView class must inherit from ExpoView. Add `: ExpoView` to the class declaration.",
-          line: 1,
-          column: 1
+          line: 2,
+          column: 7
         )
       ]
     )
