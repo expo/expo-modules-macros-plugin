@@ -1828,4 +1828,119 @@ struct ExpoModuleMacroTests {
       ]
     )
   }
+
+  @Test
+  func `views: registers view classes by type`() {
+    assertExpansion(
+      """
+      @ExpoModule(views: [CardView.self, BadgeView.self])
+      class MyModule: Module {
+      }
+      """,
+      expandedSource: """
+        class MyModule: Module {
+
+          public static let _jsName = "MyModule"
+
+          public static let _viewTypes: [Any.Type] = [CardView.self, BadgeView.self]
+
+          public func _synthesizedDefinition() -> [AnyDefinition] {
+            return []
+          }
+        }
+        """
+    )
+  }
+
+  @Test
+  func `views: combines with classes:`() {
+    assertExpansion(
+      """
+      @ExpoModule(classes: [Cache.self], views: [CardView.self])
+      class MyModule: Module {
+      }
+      """,
+      expandedSource: """
+        class MyModule: Module {
+
+          public static let _jsName = "MyModule"
+
+          public static let _viewTypes: [Any.Type] = [CardView.self]
+
+          public func _synthesizedDefinition() -> [AnyDefinition] {
+            return [
+              Cache._synthesizedClassDefinition()
+            ]
+          }
+        }
+        """
+    )
+  }
+
+  @Test
+  func `No views: argument emits no _viewTypes`() {
+    assertExpansion(
+      """
+      @ExpoModule
+      class MyModule: Module {
+      }
+      """,
+      expandedSource: """
+        class MyModule: Module {
+
+          public static let _jsName = "MyModule"
+
+          public func _synthesizedDefinition() -> [AnyDefinition] {
+            return []
+          }
+        }
+        """
+    )
+  }
+
+  @Test
+  func `A qualified type in views: is registered, not dropped`() {
+    // The base of `Outer.CardView.self` is a member access, not a bare name. Skipping it would
+    // emit no _viewTypes at all and silently never register the view.
+    assertExpansion(
+      """
+      @ExpoModule(views: [Outer.CardView.self])
+      class MyModule: Module {
+      }
+      """,
+      expandedSource: """
+        class MyModule: Module {
+
+          public static let _jsName = "MyModule"
+
+          public static let _viewTypes: [Any.Type] = [Outer.CardView.self]
+
+          public func _synthesizedDefinition() -> [AnyDefinition] {
+            return []
+          }
+        }
+        """
+    )
+  }
+
+  @Test
+  func `An explicitly empty views: list emits no _viewTypes`() {
+    assertExpansion(
+      """
+      @ExpoModule(views: [])
+      class MyModule: Module {
+      }
+      """,
+      expandedSource: """
+        class MyModule: Module {
+
+          public static let _jsName = "MyModule"
+
+          public func _synthesizedDefinition() -> [AnyDefinition] {
+            return []
+          }
+        }
+        """
+    )
+  }
 }

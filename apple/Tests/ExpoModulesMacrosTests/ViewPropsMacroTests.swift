@@ -447,8 +447,9 @@ struct ViewPropsMacroTests {
       diagnostics: [
         DiagnosticSpec(
           message: "Event props cannot be optional — 'onTap' is registered once at view creation, so its presence can't vary. Drop the '?'",
-          line: 1,
-          column: 1
+          line: 3,
+          column: 14,
+          fixIts: [FixItSpec(message: "Make 'onTap' non-optional")]
         )
       ]
     )
@@ -473,8 +474,9 @@ struct ViewPropsMacroTests {
       diagnostics: [
         DiagnosticSpec(
           message: "@Field is no longer used — @ViewProps treats every stored property as a prop. Remove the @Field attribute",
-          line: 1,
-          column: 1
+          line: 3,
+          column: 3,
+          fixIts: [FixItSpec(message: "Remove the '@Field' attribute")]
         )
       ]
     )
@@ -1261,8 +1263,9 @@ struct ViewPropsMacroTests {
       diagnostics: [
         DiagnosticSpec(
           message: "Event props cannot be optional — 'onTap' is registered once at view creation, so its presence can't vary. Drop the '?'",
-          line: 1,
-          column: 1
+          line: 3,
+          column: 14,
+          fixIts: [FixItSpec(message: "Make 'onTap' non-optional")]
         )
       ]
     )
@@ -1338,6 +1341,72 @@ struct ViewPropsMacroTests {
           column: 1
         )
       ]
+    )
+  }
+
+  @Test
+  func `The @Field diagnostic offers a removal fix-it`() {
+    assertExpansion(
+      """
+      @ViewProps
+      struct Props {
+        @Field
+        var color: UIColor = .red
+      }
+      """,
+      expandedSource: """
+        struct Props {
+          @Field
+          var color: UIColor = .red
+        }
+        """,
+      diagnostics: [
+        DiagnosticSpec(
+          message: "@Field is no longer used — @ViewProps treats every stored property as a prop. Remove the @Field attribute",
+          line: 3,
+          column: 3,
+          fixIts: [FixItSpec(message: "Remove the '@Field' attribute")]
+        )
+      ],
+      applyFixIts: ["Remove the '@Field' attribute"],
+      fixedSource: """
+        @ViewProps
+        struct Props {
+          var color: UIColor = .red
+        }
+        """
+    )
+  }
+
+  @Test
+  func `The optional-event diagnostic offers an unwrapping fix-it`() {
+    assertExpansion(
+      """
+      @ViewProps
+      struct Props {
+        var onTap: ((TapEvent) -> Void)?
+      }
+      """,
+      expandedSource: """
+        struct Props {
+          var onTap: ((TapEvent) -> Void)?
+        }
+        """,
+      diagnostics: [
+        DiagnosticSpec(
+          message: "Event props cannot be optional — 'onTap' is registered once at view creation, so its presence can't vary. Drop the '?'",
+          line: 3,
+          column: 14,
+          fixIts: [FixItSpec(message: "Make 'onTap' non-optional")]
+        )
+      ],
+      applyFixIts: ["Make 'onTap' non-optional"],
+      fixedSource: """
+        @ViewProps
+        struct Props {
+          var onTap: (TapEvent) -> Void
+        }
+        """
     )
   }
 }
