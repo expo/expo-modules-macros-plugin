@@ -32,6 +32,11 @@ struct ScannerCLITests {
   }
 
   @Test
+  func `scan-modules rejects --platform`() {
+    #expect(ScannerCLI.run(arguments: ["scan-modules", "--platform", "iOS", "/tmp"]) == 2)
+  }
+
+  @Test
   func `scan-exports rejects the scan-modules options`() {
     #expect(ScannerCLI.run(arguments: ["scan-exports", "--platform", "iOS", "/tmp"]) == 2)
     #expect(ScannerCLI.run(arguments: ["scan-exports", "--define", "DEBUG", "/tmp"]) == 2)
