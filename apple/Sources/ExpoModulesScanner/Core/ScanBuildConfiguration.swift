@@ -8,9 +8,9 @@ import SwiftSyntax
 /// its declarations and surfaces a warning instead of guessing.
 struct ScanBuildConfiguration: BuildConfiguration {
   /// The target OS name to answer `os(...)` with, as spelled in the condition (`iOS`, `macOS`,
-  /// `tvOS`, `watchOS`, `visionOS`; compared case-insensitively), or `nil` when no `--platform`
-  /// was given, in which case `os(...)` conditions are unanswerable.
-  let platform: String?
+  /// `tvOS`, `watchOS`, `visionOS`; compared case-insensitively). A scan without a target OS runs
+  /// without a configuration at all (the platform-agnostic union scan), so this is always known.
+  let platform: String
 
   /// The conditional compilation flags treated as set, from repeated `--define` options.
   let defines: Set<String>
@@ -20,9 +20,6 @@ struct ScanBuildConfiguration: BuildConfiguration {
   }
 
   func isActiveTargetOS(name: String) throws -> Bool {
-    guard let platform else {
-      throw ScanConfigurationError("cannot evaluate 'os(\(name))': no --platform was given")
-    }
     return name.lowercased() == platform.lowercased()
   }
 
@@ -50,9 +47,6 @@ struct ScanBuildConfiguration: BuildConfiguration {
       case .unversioned = version,
       let frameworkPlatforms = sdkFrameworkPlatforms[module] else {
       throw ScanConfigurationError("cannot evaluate 'canImport(\(module))' in a static scan")
-    }
-    guard let platform else {
-      throw ScanConfigurationError("cannot evaluate 'canImport(\(module))': no --platform was given")
     }
     return frameworkPlatforms.contains(platform.lowercased())
   }

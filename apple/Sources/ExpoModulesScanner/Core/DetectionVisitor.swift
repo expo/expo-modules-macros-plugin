@@ -1,3 +1,4 @@
+import SwiftDiagnostics
 import SwiftIfConfig
 import SwiftSyntax
 
@@ -8,28 +9,34 @@ import SwiftSyntax
 /// name — so it sees the same declarations the compiler would hand the plugin, without compiling
 /// anything.
 ///
-/// `#if` blocks are handled by the `ActiveSyntaxVisitor` base: only clauses active under the scan's
-/// `ScanBuildConfiguration` are visited, so a declaration inside `#if os(tvOS)` is recorded exactly
-/// when the scan targets tvOS. Conditions the configuration cannot answer make their region
-/// inactive and land in the inherited `diagnostics`, which the scan surfaces as warnings.
-final class DetectionVisitor: ActiveSyntaxVisitor {
+/// `#if` blocks are handled according to the scan's configuration. With a `ScanBuildConfiguration`,
+/// only the active clause of each `#if` is visited, so a declaration inside `#if os(tvOS)` is
+/// recorded exactly when the scan targets tvOS, and conditions the configuration cannot answer make
+/// their region inactive and surface as warnings. With a `nil` configuration every clause of every
+/// `#if` is visited, so a declaration in any branch is recorded and nothing is evaluated; the
+/// per-platform aggregation in `scanModules` builds on both walks.
+final class DetectionVisitor: SyntaxVisitor {
   private let file: String
   private let converter: SourceLocationConverter
   /// Only these macros are recorded; the rest are ignored. Lets a `modules` scan report just
   /// `@ExpoModule` while an `exports` scan covers them all.
   private let detectedMacros: Set<DetectedMacro>
+  /// The configuration `#if` conditions are evaluated against, or `nil` to visit every branch.
+  private let configuration: ScanBuildConfiguration?
+  private var diagnostics: [Diagnostic] = []
   private(set) var detections: [Detection] = []
 
   init(
     file: String,
     tree: SourceFileSyntax,
     detectedMacros: Set<DetectedMacro>,
-    configuration: ScanBuildConfiguration
+    configuration: ScanBuildConfiguration?
   ) {
     self.file = file
     self.converter = SourceLocationConverter(fileName: file, tree: tree)
     self.detectedMacros = detectedMacros
-    super.init(viewMode: .sourceAccurate, configuration: configuration)
+    self.configuration = configuration
+    super.init(viewMode: .sourceAccurate)
   }
 
   /// The accumulated `#if` warnings as `Detection`-style locations plus the message, ready for the
@@ -39,6 +46,20 @@ final class DetectionVisitor: ActiveSyntaxVisitor {
       let location = diagnostic.location(converter: converter)
       return ScanWarning(message: diagnostic.message, file: file, line: location.line)
     }
+  }
+
+  override func visit(_ node: IfConfigDeclSyntax) -> SyntaxVisitorContinueKind {
+    guard let configuration else {
+      // Every branch is visited, so a declaration in any clause is recorded.
+      return .visitChildren
+    }
+    let (clause, clauseDiagnostics) = node.activeClause(in: configuration)
+    diagnostics.append(contentsOf: clauseDiagnostics)
+    if let elements = clause?.elements {
+      // A nested `#if` inside the active clause comes back through this method.
+      walk(elements)
+    }
+    return .skipChildren
   }
 
   override func visit(_ node: ClassDeclSyntax) -> SyntaxVisitorContinueKind {

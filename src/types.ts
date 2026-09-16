@@ -140,6 +140,12 @@ export interface ScanStats {
   durationMs: number;
 }
 
+/**
+ * An Apple OS the scanner attributes modules to, spelled as `os(...)` spells it. The casing is part
+ * of the output contract, so consumers with a lowercase convention must fold the case themselves.
+ */
+export type ScannedPlatform = 'iOS' | 'macOS' | 'tvOS' | 'watchOS' | 'visionOS';
+
 /** One module in the `scan-modules` output. */
 export interface ScannedModule {
   name: string;
@@ -150,6 +156,12 @@ export interface ScannedModule {
    * the class from the app target, so anything below `public` can't be registered.
    */
   accessLevel: string;
+  /**
+   * The OSes whose builds include this class, resolved from the enclosing `#if` conditions. An
+   * unconditional module lists every OS. Empty means no build is known to include it, so don't
+   * register it.
+   */
+  platforms: ScannedPlatform[];
   file: string;
 }
 
@@ -173,5 +185,5 @@ export interface ScanExportsResult {
  * `schemaVersion` in each report and throws on a mismatch, so a binary/wrapper version skew surfaces
  * as a clear error instead of silently misread fields.
  */
-export const SUPPORTED_SCAN_MODULES_SCHEMA_VERSION = 1;
+export const SUPPORTED_SCAN_MODULES_SCHEMA_VERSION = 2;
 export const SUPPORTED_SCAN_EXPORTS_SCHEMA_VERSION = 1;
