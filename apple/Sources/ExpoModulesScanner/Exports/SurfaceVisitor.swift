@@ -441,29 +441,38 @@ func inherits(from name: String, in clause: InheritanceClauseSyntax?) -> Bool {
   }
 }
 
-/// The raw value a case writes, as source text, or `nil` when it writes none.
+/// The raw value a case writes, or `nil` when it writes none.
 ///
-/// A raw value must be a literal, so an interpolated string (`case a = "x\(y)"`) is not a legal one.
-/// It is still rejected explicitly rather than passed through: reading only single-segment literals
-/// keeps a spelling this can't interpret from being reported as if it were understood. Every other
-/// expression (an integer literal, a negative value, a `#if`-free constant) passes through verbatim,
-/// since the consumer, not the scanner, decides what to do with it.
+/// A string literal is reported **decoded**: `case a = "act"` yields `act`, with no quotes, because a
+/// `String` raw value is always fully known (see `derivedStringRawValue(for:rawType:)`) and a consumer
+/// should not have to unquote it. Every other expression is reported as **source text**, since an
+/// integer raw value may be any literal expression the scanner can't evaluate. Which of the two a
+/// `rawValue` holds follows from the enum's `rawType`, and `ExportedEnumCase` documents that contract.
+///
+/// A literal this can't decode is treated as writing no raw value rather than reported half-read: an
+/// interpolated string (`case a = "x\(y)"`, not a legal raw value anyway), or one whose segment carries
+/// a backslash escape, which would need real unescaping to turn into its value. A `String` case then
+/// falls back to the derived name, keeping that invariant intact.
 private func writtenRawValue(of element: EnumCaseElementSyntax) -> String? {
   guard let value = element.rawValue?.value else {
     return nil
   }
-  if let literal = value.as(StringLiteralExprSyntax.self) {
-    guard literal.segments.count == 1, literal.segments.first?.is(StringSegmentSyntax.self) == true else {
-      // An interpolated literal: report the case as writing no raw value rather than emit text that
-      // isn't the value.
-      return nil
-    }
+  guard let literal = value.as(StringLiteralExprSyntax.self) else {
+    // Not a string: an integer literal, a negative value, or an expression. Source text verbatim.
+    return value.trimmedDescription
   }
-  return value.trimmedDescription
+  guard literal.segments.count == 1,
+    let segment = literal.segments.first?.as(StringSegmentSyntax.self) else {
+    return nil
+  }
+  // The segment's text is the literal's content with its delimiters already stripped, so a plain
+  // `"act"` and a raw `#"act"#` both read as `act`. An escape is left to the fallback rather than
+  // emitted raw, since `\n` here is two characters, not a newline.
+  let content = segment.content.text
+  return content.contains("\\") ? nil : content
 }
 
-/// The raw value Swift gives a `String`-backed case that writes none: the case's own name, quoted to
-/// match the source text a written value is reported as.
+/// The raw value Swift gives a `String`-backed case that writes none: the case's own name.
 ///
 /// Only `String` is derived. Its defaulting is per-case and carry-free, so a case that can't be read
 /// can't affect any other, and every legal spelling is a single-segment literal. That closes the case
@@ -485,7 +494,8 @@ private func derivedStringRawValue(for caseName: String, rawType: TypeNode?) -> 
   guard name == "String" else {
     return nil
   }
-  return "\"\(caseName)\""
+  // Decoded, matching how a written string literal is reported: the value, not its source spelling.
+  return caseName
 }
 
 /// Protocols an `Enumerable` enum commonly adopts, which a syntactic scan would otherwise mistake for

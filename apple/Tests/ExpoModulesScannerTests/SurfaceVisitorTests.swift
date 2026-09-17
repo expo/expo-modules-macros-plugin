@@ -202,9 +202,9 @@ struct EnumSurfaceTests {
     #expect(enumeration.name == "Status")
     #expect(enumeration.rawType == .primitive(name: "String", jsType: .string))
     #expect(enumeration.cases.map(\.name) == ["active", "idle"])
-    // A String-backed case with no written value takes the case's own name, quoted to match the
-    // source text a written value is reported as.
-    #expect(enumeration.cases.map(\.rawValue) == ["\"active\"", "\"idle\""])
+    // A String raw value is reported decoded: the value, not its source spelling. A case with no
+    // written value takes the case's own name.
+    #expect(enumeration.cases.map(\.rawValue) == ["active", "idle"])
   }
 
   @Test
@@ -351,7 +351,7 @@ struct EnumSurfaceTests {
 
     // The invariant a consumer relies on: a String-backed enum reports a raw value on *every* case,
     // so there is nothing left to derive on the other side of the boundary.
-    #expect(enumeration.cases.map(\.rawValue) == ["\"playing\"", "\"paused\"", "\"halted\""])
+    #expect(enumeration.cases.map(\.rawValue) == ["playing", "paused", "halted"])
   }
 
   @Test
@@ -367,7 +367,7 @@ struct EnumSurfaceTests {
 
     // `Swift.String` is a legal raw type that parses as a `.ref` rather than a `.primitive`; the
     // invariant has to hold for it too.
-    #expect(enumeration.cases.map(\.rawValue) == ["\"active\""])
+    #expect(enumeration.cases.map(\.rawValue) == ["active"])
   }
 
   @Test
@@ -384,7 +384,42 @@ struct EnumSurfaceTests {
 
     // An interpolated literal isn't a legal raw value, and its source text isn't the value, so it's
     // not passed through. Reporting the derived name keeps the String invariant intact.
-    #expect(enumeration.cases.map(\.rawValue) == ["\"a\"", "\"plain\""])
+    #expect(enumeration.cases.map(\.rawValue) == ["a", "plain"])
+  }
+
+  @Test
+  func `Decodes a raw string literal and falls back on an escape`() throws {
+    let enumeration = try #require(
+      surface(
+        #"""
+        enum Status: String, Enumerable {
+          case a = #"raw"#
+          case b = "tab\there"
+        }
+        """#
+      ).enums.first)
+
+    // A raw literal's delimiters are stripped like any other's. An escape would need real unescaping
+    // to become its value, so that case falls back to the derived name rather than reporting `\t`
+    // as the two characters it is written as.
+    #expect(enumeration.cases.map(\.rawValue) == ["raw", "b"])
+  }
+
+  @Test
+  func `Reports an integer raw value as written, not decoded`() throws {
+    let enumeration = try #require(
+      surface(
+        """
+        enum Priority: Int, Enumerable {
+          case low = 1
+          case shifted = 1 << 3
+        }
+        """
+      ).enums.first)
+
+    // An integer raw value may be any literal expression, so it stays source text: the scanner can't
+    // evaluate `1 << 3`, and reporting it verbatim is the honest answer.
+    #expect(enumeration.cases.map(\.rawValue) == ["1", "1 << 3"])
   }
 
   @Test
