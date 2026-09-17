@@ -432,12 +432,27 @@ func inherits(from name: String, in clause: InheritanceClauseSyntax?) -> Bool {
   }
 }
 
-/// The raw value type of an enum: the first inherited type that isn't the `Enumerable` conformance
-/// itself. Swift requires the raw type to be written first, so anything after it is a protocol. `nil`
-/// when the enum declares no raw type (`enum E: Enumerable`).
+/// Protocols an `Enumerable` enum commonly adopts, which a syntactic scan would otherwise mistake for
+/// a raw value type when one is written ahead of the conformance (`enum E: Codable, Enumerable`, which
+/// has no raw type). Only the first inherited entry is ever tested against this, so the list needs to
+/// name just what can legally precede `Enumerable`, not every protocol in existence.
+private let knownNonRawValueProtocols: Set<String> = [
+  "CaseIterable", "Codable", "Decodable", "Encodable", "Equatable", "Error", "Hashable",
+  "Identifiable", "Sendable", enumerableConformanceName,
+]
+
+/// The raw value type of an enum, or `nil` when it declares none.
+///
+/// Swift allows a raw type only in first position, so nothing after the first entry can be one. The
+/// first entry is still not necessarily a raw type: `enum E: Codable, Enumerable` is a legal
+/// raw-value-less enum, and a scan can't resolve a bare name to tell a protocol from a type. It's
+/// matched against `knownNonRawValueProtocols` instead, which covers what an `Enumerable` enum
+/// realistically adopts. An unlisted protocol written first would still be misreported as a raw type;
+/// that is the residual limit of reading this syntactically.
 func rawValueType(of clause: InheritanceClauseSyntax?) -> TypeNode? {
   guard let first = clause?.inheritedTypes.first?.type,
-    first.trimmedDescription.split(separator: ".").last.map(String.init) != enumerableConformanceName else {
+    let trailing = first.trimmedDescription.split(separator: ".").last.map(String.init),
+    !knownNonRawValueProtocols.contains(trailing) else {
     return nil
   }
   return typeNode(from: first)

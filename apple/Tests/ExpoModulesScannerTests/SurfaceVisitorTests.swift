@@ -300,6 +300,41 @@ struct EnumSurfaceTests {
   }
 
   @Test
+  func `Reports no raw type when a protocol precedes the conformance`() {
+    let visitor = surface(
+      """
+      enum A: Codable, Enumerable { case a }
+      enum B: CaseIterable, Enumerable { case b }
+      enum C: Sendable, Enumerable { case c }
+      """
+    )
+
+    // All three are legal raw-value-less enums: a protocol written first is not a raw type, and
+    // reporting one would have a generator emit the enum as a `Codable`-typed value.
+    #expect(visitor.enums.map(\.name) == ["A", "B", "C"])
+    #expect(visitor.enums.allSatisfy { $0.rawType == nil })
+  }
+
+  @Test
+  func `Reports only the raw values a case writes, not Swift's implicit continuation`() throws {
+    let enumeration = try #require(
+      surface(
+        """
+        enum Continued: Int, Enumerable {
+          case a = 1
+          case b
+          case c = 10
+          case d
+        }
+        """
+      ).enums.first)
+
+    // `b` is 2 and `d` is 11, each continuing from the preceding explicit value. Deriving that would
+    // bake Swift's rules into the scan, so an unwritten raw value is reported absent.
+    #expect(enumeration.cases.map(\.rawValue) == ["1", nil, "10", nil])
+  }
+
+  @Test
   func `Reports each case of a multi-case declaration`() throws {
     let enumeration = try #require(
       surface(
