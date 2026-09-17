@@ -52,11 +52,15 @@ func scanExports(paths: [String]) -> ScanExportsResult {
     unions.append(contentsOf: visitor.unions)
   }
 
+  // Refs resolve only once every file has been walked: a type parsed in one file may name a type
+  // declared in another, so the full set of declarations has to exist before any lookup is valid.
+  let surface = ExportedSurface(
+    modules: modules, sharedObjects: sharedObjects, records: records, enums: enums, unions: unions
+  ).resolvingRefs()
+
   return ScanExportsResult(
     schemaVersion: scanExportsSchemaVersion,
-    exports: ExportedSurface(
-      modules: modules, sharedObjects: sharedObjects, records: records, enums: enums,
-      unions: unions),
+    exports: surface,
     stats: stats
   )
 }

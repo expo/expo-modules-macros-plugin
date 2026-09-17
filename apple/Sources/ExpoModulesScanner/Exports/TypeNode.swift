@@ -21,6 +21,21 @@ enum JSType: String, Encodable {
   case function
 }
 
+/// Which of the scanned kinds declares the name a `.ref` points at.
+///
+/// Resolution happens after the whole scan (`ExportedSurface.resolvingRefs()`), not while parsing a
+/// type: a `TypeNode` is built from one `TypeSyntax` in isolation, long before the scanner knows what
+/// else exists. A ref the scan can't place carries no `refKind` at all rather than a value meaning "none",
+/// matching how the rest of the surface signals "nothing to say" (`returns` for `Void`, `rawType` for
+/// a bare conformance). That is not an error: it covers a platform or built-in convertible (`CGPoint`,
+/// `URL`) and a type from another module, which the consumer resolves against its own catalog.
+enum RefKind: String, Encodable {
+  case record
+  case sharedObject
+  case `enum`
+  case union
+}
+
 indirect enum TypeNode: Equatable {
   /// `Bool`, `Int`, `Double`, `String`: the types core fast-decodes. `name` is the Swift spelling;
   /// `jsType` is `boolean`/`number`/`string`.
@@ -42,9 +57,18 @@ indirect enum TypeNode: Equatable {
   /// the effects (encoded `async`/`throws`).
   case function(parameters: [TypeNode], returns: TypeNode?, isAsync: Bool, isThrowing: Bool)
 
-  /// Any other named type (record, shared object, enum, …). `name` is the possibly-qualified spelling;
-  /// the generator resolves it against the scanned types or treats it as opaque.
-  case ref(name: String)
+  /// Any other named type (record, shared object, enum, union, …). `name` is the possibly-qualified
+  /// spelling.
+  ///
+  /// `refKind` says which scanned kind declares that name, filled in after the scan by
+  /// `ExportedSurface.resolvingRefs()`; it is `nil` until then, and stays `nil` for a name the scan
+  /// never declared (a platform type like `CGPoint`, or one from another module).
+  ///
+  /// `jsTypeOverride` carries the category a resolved ref actually crosses as, when that isn't
+  /// `object`: a raw-value enum reaches JS as its raw value, so `Status: String` is a `string`. Only
+  /// resolution can know this, since the category comes from the *declaration's* `rawType`, which a
+  /// node parsed at a use site has never seen.
+  case ref(name: String, refKind: RefKind? = nil, jsTypeOverride: JSType? = nil)
 
   /// A spelling the parser doesn't model (generic parameter, tuple, metatype, …), kept verbatim so
   /// nothing is lost. Has no `typeof`.
@@ -56,8 +80,11 @@ indirect enum TypeNode: Equatable {
     switch self {
     case .primitive(_, let jsType):
       return jsType
-    case .array, .dictionary, .promise, .ref:
+    case .array, .dictionary, .promise:
       return .object
+    case .ref(_, _, let jsTypeOverride):
+      // An unresolved ref, and every resolved one but an enum, is an object.
+      return jsTypeOverride ?? .object
     case .function:
       return .function
     case .optional(let wrapped):
@@ -70,6 +97,7 @@ indirect enum TypeNode: Equatable {
 
 extension TypeNode: Encodable {
   private enum CodingKeys: String, CodingKey {
+    case refKind
     case kind
     case name
     // The `typeof` category. Spelled `typeof` in JSON (what the consumer reads); the Swift property is
@@ -109,9 +137,10 @@ extension TypeNode: Encodable {
       try container.encodeIfPresent(returns, forKey: .returns)
       try container.encode(isAsync, forKey: .isAsync)
       try container.encode(isThrowing, forKey: .isThrowing)
-    case .ref(let name):
+    case .ref(let name, let refKind, _):
       try container.encode("ref", forKey: .kind)
       try container.encode(name, forKey: .name)
+      try container.encodeIfPresent(refKind, forKey: .refKind)
     case .unknown(let text):
       try container.encode("unknown", forKey: .kind)
       try container.encode(text, forKey: .text)
@@ -236,7 +265,7 @@ extension TypeNode {
     switch self {
     case .primitive(let name, _):
       return name
-    case .ref(let name):
+    case .ref(let name, _, _):
       return name
     case .optional(let wrapped):
       return "\(wrapped.spelling)?"
