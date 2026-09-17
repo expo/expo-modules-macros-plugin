@@ -5,6 +5,7 @@ import Foundation
 enum DetectedMacro: String, Codable, CaseIterable {
   case expoModule = "ExpoModule"
   case js = "JS"
+  case event = "Event"
   case sharedObject = "SharedObject"
   case record = "Record"
 }

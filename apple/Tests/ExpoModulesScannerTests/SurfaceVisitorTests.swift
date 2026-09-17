@@ -185,6 +185,225 @@ struct RecordSurfaceTests {
   }
 }
 
+@Suite("Exports surface: events")
+struct EventSurfaceTests {
+  @Test
+  func `Extracts @Event members with payload, JS name, and sync flag`() throws {
+    let module = try #require(
+      surface(
+        """
+        @ExpoModule
+        final class PlayerModule {
+          @Event
+          var onStatusChange: (StatusPayload) -> Void
+
+          @Event
+          var onFinish: () -> Void
+
+          @Event("legacyName")
+          var onRenamed: (Int) -> Void
+
+          @Event(sync: true)
+          var onTick: (Double) -> Void
+
+          // Not an event: a plain @JS member.
+          @JS
+          func play() {}
+        }
+        """
+      ).modules.first)
+
+    #expect(module.events.map(\.name) == ["onStatusChange", "onFinish", "onRenamed", "onTick"])
+
+    // The conventional `on` prefix is stripped for the JS name; the Swift name is kept separately.
+    let status = try #require(module.events.first { $0.name == "onStatusChange" })
+    #expect(status.jsName == "statusChange")
+    #expect(status.payload == .ref(name: "StatusPayload"))
+    #expect(status.isSync == false)
+
+    // A `() -> Void` event has no payload.
+    let finish = try #require(module.events.first { $0.name == "onFinish" })
+    #expect(finish.jsName == "finish")
+    #expect(finish.payload == nil)
+
+    // An explicit override is used verbatim, never transformed.
+    let renamed = try #require(module.events.first { $0.name == "onRenamed" })
+    #expect(renamed.jsName == "legacyName")
+
+    let tick = try #require(module.events.first { $0.name == "onTick" })
+    #expect(tick.isSync == true)
+
+    // Events are collected separately from functions and properties.
+    #expect(module.functions.map(\.name) == ["play"])
+    #expect(module.properties.isEmpty)
+  }
+
+  /// Pins the derivation against `EventMacro`'s copy: a drift produces listener names the module
+  /// never emits.
+  @Test(arguments: [
+    ("onStatusChange", "statusChange"),
+    // A leading acronym run keeps its last capital, which starts the next word.
+    ("onURLChange", "urlChange"),
+    ("onURL", "url"),
+    // No `on` prefix, or no capital after it: passed through verbatim.
+    ("statusChange", "statusChange"),
+    ("online", "online"),
+    ("on", "on"),
+  ])
+  func `Derives the JS event name the way the macro does`(swiftName: String, expected: String) throws {
+    let module = try #require(
+      surface(
+        """
+        @ExpoModule
+        final class EventsModule {
+          @Event
+          var \(swiftName): (Int) -> Void
+        }
+        """
+      ).modules.first)
+
+    #expect(module.events.map(\.jsName) == [expected])
+  }
+
+  @Test
+  func `Extracts @Event members on a shared object`() throws {
+    let sharedObject = try #require(
+      surface(
+        """
+        @SharedObject
+        final class Download: SharedObject {
+          @Event
+          var onProgress: (Double) -> Void
+        }
+        """
+      ).sharedObjects.first)
+
+    let progress = try #require(sharedObject.events.first)
+    #expect(progress.name == "onProgress")
+    #expect(progress.jsName == "progress")
+    #expect(progress.payload == .primitive(name: "Double", jsType: .number))
+  }
+
+  /// Every shape `EventMacro.validatedEvent(of:on:)` rejects. None expands to an event at runtime.
+  @Test
+  func `Skips an @Event the macro would reject`() throws {
+    let module = try #require(
+      surface(
+        """
+        @ExpoModule
+        final class BadEventsModule {
+          // Not a function type.
+          @Event
+          var notAFunction: Int
+
+          // No type annotation at all.
+          @Event
+          var untyped = 0
+
+          // Events are emitted from an instance.
+          @Event
+          static var onStatic: (Int) -> Void
+
+          // The macro synthesizes a computed getter, which a 'let' cannot be.
+          @Event
+          let onLet: (Int) -> Void
+
+          // An event dispatches to JS and has no return value.
+          @Event
+          var onReturns: (Int) -> String
+
+          // At most one payload parameter.
+          @Event
+          var onTwoParams: (Int, String) -> Void
+
+          // The macro synthesizes the getter, so hand-written accessors are rejected.
+          @Event
+          var onComputed: (Int) -> Void { { _ in } }
+
+          // An initial value is rejected; the macro synthesizes the closure.
+          @Event
+          var onInitialized: (Int) -> Void = { _ in }
+
+          @Event
+          var onValid: () -> Void
+        }
+        """
+      ).modules.first)
+
+    #expect(module.events.map(\.name) == ["onValid"])
+  }
+
+  /// The macro accepts all four spellings, so the surface must too. The shared `isVoidType` accepts
+  /// only the first two, which is why the event path has its own check.
+  @Test
+  func `Accepts every spelling of a Void event return`() throws {
+    let module = try #require(
+      surface(
+        """
+        @ExpoModule
+        final class VoidSpellingsModule {
+          @Event
+          var onPlain: (Int) -> Void
+
+          @Event
+          var onEmptyTuple: (Int) -> ()
+
+          @Event
+          var onQualified: (Int) -> Swift.Void
+
+          @Event
+          var onParenthesized: (Int) -> (Void)
+        }
+        """
+      ).modules.first)
+
+    #expect(module.events.map(\.name) == ["onPlain", "onEmptyTuple", "onQualified", "onParenthesized"])
+  }
+
+  /// `@JS` and `@Event` on one property is a macro error. The scanner doesn't diagnose, but must
+  /// not report the member twice.
+  @Test
+  func `Reports a property carrying both @JS and @Event only once`() throws {
+    let module = try #require(
+      surface(
+        """
+        @ExpoModule
+        final class ConflictModule {
+          @JS
+          @Event
+          var onBoth: (Int) -> Void
+        }
+        """
+      ).modules.first)
+
+    #expect(module.events.isEmpty)
+    #expect(module.properties.map(\.name) == ["onBoth"])
+  }
+
+  @Test
+  func `Unwraps attributed and parenthesized event function types`() throws {
+    let module = try #require(
+      surface(
+        """
+        @ExpoModule
+        final class WrappedModule {
+          @Event
+          var onSendable: @Sendable (Int) -> Void
+
+          @Event
+          var onParenthesized: ((String) -> Void)
+        }
+        """
+      ).modules.first)
+
+    #expect(module.events.map(\.jsName) == ["sendable", "parenthesized"])
+    #expect(module.events.map(\.payload) == [
+      .primitive(name: "Int", jsType: .number),
+      .primitive(name: "String", jsType: .string),
+    ])
+  }
+}
+
 @Suite("Exports surface: scoping")
 struct SurfaceScopingTests {
   @Test

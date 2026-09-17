@@ -94,8 +94,24 @@ export interface ExportedModule {
   jsName: string;
   functions: ExportedFunction[];
   properties: ExportedProperty[];
+  events: ExportedEvent[];
   /** Absolute source path. */
   file: string;
+}
+
+/** One `@Event var`: a typed event JS listens for by name, rather than calls. */
+export interface ExportedEvent {
+  /** The Swift property name, e.g. `onStatusChange`. */
+  name: string;
+  /**
+   * The name JS listens under: the `@Event("x")` override, else `name` with a conventional `on`
+   * prefix stripped and decapitalized (`onStatusChange` -> `statusChange`).
+   */
+  jsName: string;
+  /** The payload type, absent for a no-payload `() -> Void` event. */
+  payload?: TypeNode;
+  /** `@Event(sync: true)`, dispatching inline on the JS thread instead of scheduling. */
+  sync: boolean;
 }
 
 /** A `@SharedObject` type: a JS class with an optional constructor plus its `@JS` members. */
@@ -106,6 +122,7 @@ export interface ExportedSharedObject {
   constructorParameters?: ExportedParameter[];
   functions: ExportedFunction[];
   properties: ExportedProperty[];
+  events: ExportedEvent[];
   file: string;
 }
 
@@ -186,4 +203,4 @@ export interface ScanExportsResult {
  * as a clear error instead of silently misread fields.
  */
 export const SUPPORTED_SCAN_MODULES_SCHEMA_VERSION = 2;
-export const SUPPORTED_SCAN_EXPORTS_SCHEMA_VERSION = 1;
+export const SUPPORTED_SCAN_EXPORTS_SCHEMA_VERSION = 2;
