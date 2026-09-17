@@ -133,11 +133,42 @@ export interface ExportedRecord {
   file: string;
 }
 
+/**
+ * One case of a reported enum.
+ *
+ * What `rawValue` carries depends on the enum's raw type:
+ * - `String`: always present, and decoded (`case active = "act"` reports `act`, unquoted). A case
+ *   writing none takes its own name, so nothing is left to derive.
+ * - an integer type: present only where written, as source text (`1`, `1 << 3`), since the value may
+ *   be an expression a syntactic scan cannot evaluate. Swift also continues from the preceding case's
+ *   value (`case a = 1; case b` makes `b` 2), and that carry is yours to apply.
+ * - no raw type: always absent, since the enum has no raw values.
+ */
+export interface ExportedEnumCase {
+  /** The case name as declared. */
+  name: string;
+  /** The raw value, decoded for a string and verbatim source text otherwise, or absent per the rule above. */
+  rawValue?: string;
+}
+
+/**
+ * An `Enumerable` enum: a type crossing the boundary as its raw value rather than as an object.
+ * Detected by conformance, not by a macro attribute, so it carries no `jsName`.
+ */
+export interface ExportedEnum {
+  name: string;
+  /** The raw value type as written, absent for a bare `Enumerable` conformance with no raw type. */
+  rawType?: TypeNode;
+  cases: ExportedEnumCase[];
+  file: string;
+}
+
 /** The exported types grouped by kind. */
 export interface ExportedSurface {
   modules: ExportedModule[];
   sharedObjects: ExportedSharedObject[];
   records: ExportedRecord[];
+  enums: ExportedEnum[];
 }
 
 /** A `#if` condition the scan couldn't answer statically. */
@@ -151,7 +182,7 @@ export interface ScanWarning {
 export interface ScanStats {
   /** `.swift` files the walk found and read. */
   filesScanned: number;
-  /** Of those, how many contained a macro attribute and so were parsed. */
+  /** Of those, how many matched the pre-filter (a macro attribute or a scanned conformance). */
   filesParsed: number;
   /** Wall-clock duration of the scan, in milliseconds. */
   durationMs: number;
@@ -203,4 +234,4 @@ export interface ScanExportsResult {
  * as a clear error instead of silently misread fields.
  */
 export const SUPPORTED_SCAN_MODULES_SCHEMA_VERSION = 2;
-export const SUPPORTED_SCAN_EXPORTS_SCHEMA_VERSION = 2;
+export const SUPPORTED_SCAN_EXPORTS_SCHEMA_VERSION = 3;

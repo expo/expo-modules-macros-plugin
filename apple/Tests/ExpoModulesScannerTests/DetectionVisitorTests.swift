@@ -267,8 +267,25 @@ struct MacroPrefilterTests {
 
   @Test
   func `Over-approximates: matches the attribute inside a string literal`() {
-    // A false positive here is acceptable — the file is parsed and then yields no detections.
+    // A false positive here is acceptable, the file is parsed and then yields no detections.
     #expect(mightContainMacro(in: #"let s = "@ExpoModule""#))
+  }
+
+  @Test
+  func `Admits a bare conformance name alongside the attributes`() {
+    let prefilter = macroAttributeRegex(for: [.expoModule], conformances: ["Enumerable"])
+    // The conformance has no `@`, so it must match bare. An enum in a file of its own carries no
+    // macro attribute at all, and would otherwise never be parsed.
+    #expect(mightContainMacro(in: "enum Status: String, Enumerable { case a }", prefilter: prefilter))
+    #expect(mightContainMacro(in: "@ExpoModule\nclass M {}", prefilter: prefilter))
+    #expect(!mightContainMacro(in: "enum Status: String { case a }", prefilter: prefilter))
+  }
+
+  @Test
+  func `Matches only the attributes when no conformance is given`() {
+    let prefilter = macroAttributeRegex(for: Set(DetectedMacro.allCases))
+    // `scan-modules` passes no conformances, so an Enumerable enum doesn't force a parse there.
+    #expect(!mightContainMacro(in: "enum Status: String, Enumerable { case a }", prefilter: prefilter))
   }
 }
 

@@ -10,6 +10,7 @@ final class SurfaceVisitor: SyntaxVisitor {
   private(set) var modules: [ExportedModule] = []
   private(set) var sharedObjects: [ExportedSharedObject] = []
   private(set) var records: [ExportedRecord] = []
+  private(set) var enums: [ExportedEnum] = []
 
   init(file: String) {
     self.file = file
@@ -28,6 +29,24 @@ final class SurfaceVisitor: SyntaxVisitor {
   override func visit(_ node: StructDeclSyntax) -> SyntaxVisitorContinueKind {
     if isTopLevel(node) {
       classify(name: node.name.text, attributes: node.attributes, members: node.memberBlock.members)
+    }
+    return .skipChildren
+  }
+
+  /// Enums are the one type recognized by *conformance* rather than by a macro attribute: an
+  /// `Enumerable` enum crosses the boundary through core's `RawRepresentable`/`Enumerable` converter,
+  /// with no macro in the picture. `@Union` enums are deliberately not collected here: they carry
+  /// associated values, not raw values, and model a TS union rather than a raw-value enum.
+  override func visit(_ node: EnumDeclSyntax) -> SyntaxVisitorContinueKind {
+    if isTopLevel(node), inherits(from: enumerableConformanceName, in: node.inheritanceClause) {
+      let rawType = rawValueType(of: node.inheritanceClause)
+      enums.append(
+        ExportedEnum(
+          name: node.name.text,
+          rawType: rawType,
+          cases: collectEnumCases(node.memberBlock.members, rawType: rawType),
+          file: file
+        ))
     }
     return .skipChildren
   }
@@ -256,6 +275,35 @@ final class SurfaceVisitor: SyntaxVisitor {
     return properties
   }
 
+  /// The declared cases of an enum, in source order. One `case` declaration can introduce several
+  /// cases (`case a, b`), so each element is read separately. A case carrying associated values is
+  /// skipped: it has no raw value, so it can't cross the boundary as one.
+  ///
+  /// A `String`-backed case with no written value takes the case's own name, so those are filled in
+  /// here and a `String`-backed enum reports a raw value on every case. `Int` is deliberately left
+  /// alone: see `derivedStringRawValue(for:rawType:)`.
+  private func collectEnumCases(
+    _ members: MemberBlockItemListSyntax,
+    rawType: TypeNode?
+  ) -> [ExportedEnumCase] {
+    var cases: [ExportedEnumCase] = []
+
+    for member in members {
+      guard let caseDecl = member.decl.as(EnumCaseDeclSyntax.self) else {
+        continue
+      }
+      for element in caseDecl.elements where element.parameterClause == nil {
+        let name = element.name.text
+        cases.append(
+          ExportedEnumCase(
+            name: name,
+            rawValue: writtenRawValue(of: element) ?? derivedStringRawValue(for: name, rawType: rawType)
+          ))
+      }
+    }
+    return cases
+  }
+
   /// Projects a parameter clause into `ExportedParameter`s: label = first name, name = second (else
   /// first), and `optional` when it has a default value or an optional type.
   private func parameters(of clause: FunctionParameterClauseSyntax) -> [ExportedParameter] {
@@ -374,6 +422,106 @@ private func isExcludedRecordModifier(_ modifiers: DeclModifierListSyntax) -> Bo
       return false
     }
   }
+}
+
+/// The protocol whose conformance marks an enum as convertible at the JS boundary. Core converts such
+/// an enum through `Coding/…+Enumerable`, keyed on this conformance, so the scanner keys on it too.
+let enumerableConformanceName = "Enumerable"
+
+/// True when an inheritance clause names `name`. Matched on the trailing component of the written
+/// spelling, so a qualified `ExpoModulesCore.Enumerable` counts. Purely syntactic: a conformance added
+/// in a separate `extension`, or inherited through another protocol, is invisible to a scan and so is
+/// not reported.
+func inherits(from name: String, in clause: InheritanceClauseSyntax?) -> Bool {
+  guard let clause else {
+    return false
+  }
+  return clause.inheritedTypes.contains { inherited in
+    inherited.type.trimmedDescription.split(separator: ".").last.map(String.init) == name
+  }
+}
+
+/// The raw value a case writes, or `nil` when it writes none.
+///
+/// A string literal is reported **decoded**: `case a = "act"` yields `act`, with no quotes, because a
+/// `String` raw value is always fully known (see `derivedStringRawValue(for:rawType:)`) and a consumer
+/// should not have to unquote it. Every other expression is reported as **source text**, since an
+/// integer raw value may be any literal expression the scanner can't evaluate. Which of the two a
+/// `rawValue` holds follows from the enum's `rawType`, and `ExportedEnumCase` documents that contract.
+///
+/// A literal this can't decode is treated as writing no raw value rather than reported half-read: an
+/// interpolated string (`case a = "x\(y)"`, not a legal raw value anyway), or one whose segment carries
+/// a backslash escape, which would need real unescaping to turn into its value. A `String` case then
+/// falls back to the derived name, keeping that invariant intact.
+private func writtenRawValue(of element: EnumCaseElementSyntax) -> String? {
+  guard let value = element.rawValue?.value else {
+    return nil
+  }
+  guard let literal = value.as(StringLiteralExprSyntax.self) else {
+    // Not a string: an integer literal, a negative value, or an expression. Source text verbatim.
+    return value.trimmedDescription
+  }
+  guard literal.segments.count == 1,
+    let segment = literal.segments.first?.as(StringSegmentSyntax.self) else {
+    return nil
+  }
+  // The segment's text is the literal's content with its delimiters already stripped, so a plain
+  // `"act"` and a raw `#"act"#` both read as `act`. An escape is left to the fallback rather than
+  // emitted raw, since `\n` here is two characters, not a newline.
+  let content = segment.content.text
+  return content.contains("\\") ? nil : content
+}
+
+/// The raw value Swift gives a `String`-backed case that writes none: the case's own name.
+///
+/// Only `String` is derived. Its defaulting is per-case and carry-free, so a case that can't be read
+/// can't affect any other, and every legal spelling is a single-segment literal. That closes the case
+/// and lets a `String`-backed enum report a raw value on *every* case. `Int` continues
+/// from the preceding case's value (`case a = 1; case b` makes `b` 2), whether that value was written
+/// or itself derived, so one unreadable expression would corrupt every case after it. Deriving it
+/// partially would be worse than not deriving it, so integer-backed enums report only what's written
+/// and the consumer applies the continuation rule.
+private func derivedStringRawValue(for caseName: String, rawType: TypeNode?) -> String? {
+  // `String` is a `.primitive`, but a qualified `Swift.String` parses as a `.ref`, and both are legal
+  // raw types. Matching the trailing component covers each, the same way the conformance check does.
+  let name: String?
+  switch rawType {
+  case .primitive(let spelling, _), .ref(let spelling):
+    name = spelling.split(separator: ".").last.map(String.init)
+  default:
+    name = nil
+  }
+  guard name == "String" else {
+    return nil
+  }
+  // Decoded, matching how a written string literal is reported: the value, not its source spelling.
+  return caseName
+}
+
+/// Protocols an `Enumerable` enum commonly adopts, which a syntactic scan would otherwise mistake for
+/// a raw value type when one is written ahead of the conformance (`enum E: Codable, Enumerable`, which
+/// has no raw type). Only the first inherited entry is ever tested against this, so the list needs to
+/// name just what can legally precede `Enumerable`, not every protocol in existence.
+private let knownNonRawValueProtocols: Set<String> = [
+  "CaseIterable", "Codable", "Decodable", "Encodable", "Equatable", "Error", "Hashable",
+  "Identifiable", "Sendable", enumerableConformanceName,
+]
+
+/// The raw value type of an enum, or `nil` when it declares none.
+///
+/// Swift allows a raw type only in first position, so nothing after the first entry can be one. The
+/// first entry is still not necessarily a raw type: `enum E: Codable, Enumerable` is a legal
+/// raw-value-less enum, and a scan can't resolve a bare name to tell a protocol from a type. It's
+/// matched against `knownNonRawValueProtocols` instead, which covers what an `Enumerable` enum
+/// realistically adopts. An unlisted protocol written first would still be misreported as a raw type;
+/// that is the residual limit of reading this syntactically.
+func rawValueType(of clause: InheritanceClauseSyntax?) -> TypeNode? {
+  guard let first = clause?.inheritedTypes.first?.type,
+    let trailing = first.trimmedDescription.split(separator: ".").last.map(String.init),
+    !knownNonRawValueProtocols.contains(trailing) else {
+    return nil
+  }
+  return typeNode(from: first)
 }
 
 /// True when a type is written as an optional: `T?`, `T!`, or `Optional<T>`, mirroring the macros'
