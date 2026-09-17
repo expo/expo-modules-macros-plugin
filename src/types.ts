@@ -133,15 +133,19 @@ export interface ExportedRecord {
   file: string;
 }
 
-/** One case of a reported enum. */
+/**
+ * One case of a reported enum.
+ *
+ * What `rawValue` carries depends on the enum's raw type:
+ * - `String`: always present. A case writing none takes its own name, so nothing is left to derive.
+ * - an integer type: present only where written. Swift continues from the preceding case's value
+ *   (`case a = 1; case b` makes `b` 2), and that carry is yours to apply.
+ * - no raw type: always absent, since the enum has no raw values.
+ */
 export interface ExportedEnumCase {
   /** The case name as declared. */
   name: string;
-  /**
-   * The explicitly written raw value's source text (`"active"`, `3`), absent when the case declares
-   * none. Swift's implicit raw values (a `String` case's own name, an `Int` case's ordinal) are left
-   * to the consumer to derive.
-   */
+  /** The raw value as source text, quotes included (`"active"`, `3`), or absent per the rule above. */
   rawValue?: string;
 }
 

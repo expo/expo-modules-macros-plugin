@@ -202,15 +202,19 @@ struct ExportedRecord: Encodable, Equatable {
   let file: String
 }
 
-/// One case of a reported enum. A raw value is reported only when written explicitly; Swift's implicit
-/// raw values (a `String` case's own name, an `Int` case's ordinal) are left to the consumer to derive,
-/// because deriving them here would bake Swift's defaulting rules into the output shape.
+/// One case of a reported enum.
+///
+/// What `rawValue` carries depends on the enum's raw type, and a consumer reads it that way:
+/// - `String`: always present. A case writing none takes its own name, so nothing is left to derive.
+/// - an integer type: present only where written. Swift continues from the preceding case's value
+///   (`case a = 1; case b` makes `b` 2), and that carry is the consumer's to apply.
+/// - no raw type: always absent, since the enum has no raw values.
 struct ExportedEnumCase: Encodable, Equatable {
   /// The case name as declared.
   let name: String
 
-  /// The explicitly written raw value's source text (`"active"`, `3`), or `nil` when the case declares
-  /// none. Kept as text because a syntactic scan can't evaluate the expression.
+  /// The raw value as source text, quotes included (`"active"`, `3`), or `nil` per the rule above.
+  /// Kept as text because a syntactic scan can't evaluate the expression.
   let rawValue: String?
 
   private enum CodingKeys: String, CodingKey {

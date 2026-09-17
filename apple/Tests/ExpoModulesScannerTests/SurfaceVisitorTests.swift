@@ -202,8 +202,9 @@ struct EnumSurfaceTests {
     #expect(enumeration.name == "Status")
     #expect(enumeration.rawType == .primitive(name: "String", jsType: .string))
     #expect(enumeration.cases.map(\.name) == ["active", "idle"])
-    // Only an explicitly written raw value is reported; an implicit one is left to the consumer.
-    #expect(enumeration.cases.map(\.rawValue) == ["\"active\"", nil])
+    // A String-backed case with no written value takes the case's own name, quoted to match the
+    // source text a written value is reported as.
+    #expect(enumeration.cases.map(\.rawValue) == ["\"active\"", "\"idle\""])
   }
 
   @Test
@@ -329,9 +330,74 @@ struct EnumSurfaceTests {
         """
       ).enums.first)
 
-    // `b` is 2 and `d` is 11, each continuing from the preceding explicit value. Deriving that would
-    // bake Swift's rules into the scan, so an unwritten raw value is reported absent.
+    // `b` is 2 and `d` is 11, each continuing from the preceding explicit value, written or derived.
+    // One unreadable expression would corrupt every case after it, so Int is never derived and the
+    // consumer applies the continuation rule. Only String, which has no carry, is filled in.
     #expect(enumeration.cases.map(\.rawValue) == ["1", nil, "10", nil])
+  }
+
+  @Test
+  func `Derives a String raw value for every case that writes none`() throws {
+    let enumeration = try #require(
+      surface(
+        """
+        enum Status: String, Enumerable {
+          case playing
+          case paused
+          case stopped = "halted"
+        }
+        """
+      ).enums.first)
+
+    // The invariant a consumer relies on: a String-backed enum reports a raw value on *every* case,
+    // so there is nothing left to derive on the other side of the boundary.
+    #expect(enumeration.cases.map(\.rawValue) == ["\"playing\"", "\"paused\"", "\"halted\""])
+  }
+
+  @Test
+  func `Derives String raw values through a qualified raw type`() throws {
+    let enumeration = try #require(
+      surface(
+        """
+        enum Status: Swift.String, Enumerable {
+          case active
+        }
+        """
+      ).enums.first)
+
+    // `Swift.String` is a legal raw type that parses as a `.ref` rather than a `.primitive`; the
+    // invariant has to hold for it too.
+    #expect(enumeration.cases.map(\.rawValue) == ["\"active\""])
+  }
+
+  @Test
+  func `Falls back to the derived name for an interpolated raw value`() throws {
+    let enumeration = try #require(
+      surface(
+        #"""
+        enum Status: String, Enumerable {
+          case a = "x\(y)"
+          case b = "plain"
+        }
+        """#
+      ).enums.first)
+
+    // An interpolated literal isn't a legal raw value, and its source text isn't the value, so it's
+    // not passed through. Reporting the derived name keeps the String invariant intact.
+    #expect(enumeration.cases.map(\.rawValue) == ["\"a\"", "\"plain\""])
+  }
+
+  @Test
+  func `Leaves a raw value alone when the enum has no String raw type`() throws {
+    let ints = try #require(
+      surface("enum P: Int, Enumerable { case low = 1\n case high }").enums.first)
+    let bare = try #require(
+      surface("enum M: Enumerable { case on }").enums.first)
+
+    // Nothing to derive without a String raw type: an Int case carries the continuation rule, and a
+    // raw-value-less enum has no raw values at all.
+    #expect(ints.cases.map(\.rawValue) == ["1", nil])
+    #expect(bare.cases.map(\.rawValue) == [nil])
   }
 
   @Test

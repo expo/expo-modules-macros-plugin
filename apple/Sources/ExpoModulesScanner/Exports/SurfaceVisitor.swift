@@ -39,11 +39,12 @@ final class SurfaceVisitor: SyntaxVisitor {
   /// associated values, not raw values, and model a TS union rather than a raw-value enum.
   override func visit(_ node: EnumDeclSyntax) -> SyntaxVisitorContinueKind {
     if isTopLevel(node), inherits(from: enumerableConformanceName, in: node.inheritanceClause) {
+      let rawType = rawValueType(of: node.inheritanceClause)
       enums.append(
         ExportedEnum(
           name: node.name.text,
-          rawType: rawValueType(of: node.inheritanceClause),
-          cases: collectEnumCases(node.memberBlock.members),
+          rawType: rawType,
+          cases: collectEnumCases(node.memberBlock.members, rawType: rawType),
           file: file
         ))
     }
@@ -277,7 +278,14 @@ final class SurfaceVisitor: SyntaxVisitor {
   /// The declared cases of an enum, in source order. One `case` declaration can introduce several
   /// cases (`case a, b`), so each element is read separately. A case carrying associated values is
   /// skipped: it has no raw value, so it can't cross the boundary as one.
-  private func collectEnumCases(_ members: MemberBlockItemListSyntax) -> [ExportedEnumCase] {
+  ///
+  /// A `String`-backed case with no written value takes the case's own name, so those are filled in
+  /// here and a `String`-backed enum reports a raw value on every case. `Int` is deliberately left
+  /// alone: see `derivedStringRawValue(for:rawType:)`.
+  private func collectEnumCases(
+    _ members: MemberBlockItemListSyntax,
+    rawType: TypeNode?
+  ) -> [ExportedEnumCase] {
     var cases: [ExportedEnumCase] = []
 
     for member in members {
@@ -285,10 +293,11 @@ final class SurfaceVisitor: SyntaxVisitor {
         continue
       }
       for element in caseDecl.elements where element.parameterClause == nil {
+        let name = element.name.text
         cases.append(
           ExportedEnumCase(
-            name: element.name.text,
-            rawValue: element.rawValue?.value.trimmedDescription
+            name: name,
+            rawValue: writtenRawValue(of: element) ?? derivedStringRawValue(for: name, rawType: rawType)
           ))
       }
     }
@@ -430,6 +439,53 @@ func inherits(from name: String, in clause: InheritanceClauseSyntax?) -> Bool {
   return clause.inheritedTypes.contains { inherited in
     inherited.type.trimmedDescription.split(separator: ".").last.map(String.init) == name
   }
+}
+
+/// The raw value a case writes, as source text, or `nil` when it writes none.
+///
+/// A raw value must be a literal, so an interpolated string (`case a = "x\(y)"`) is not a legal one.
+/// It is still rejected explicitly rather than passed through: reading only single-segment literals
+/// keeps a spelling this can't interpret from being reported as if it were understood. Every other
+/// expression (an integer literal, a negative value, a `#if`-free constant) passes through verbatim,
+/// since the consumer, not the scanner, decides what to do with it.
+private func writtenRawValue(of element: EnumCaseElementSyntax) -> String? {
+  guard let value = element.rawValue?.value else {
+    return nil
+  }
+  if let literal = value.as(StringLiteralExprSyntax.self) {
+    guard literal.segments.count == 1, literal.segments.first?.is(StringSegmentSyntax.self) == true else {
+      // An interpolated literal: report the case as writing no raw value rather than emit text that
+      // isn't the value.
+      return nil
+    }
+  }
+  return value.trimmedDescription
+}
+
+/// The raw value Swift gives a `String`-backed case that writes none: the case's own name, quoted to
+/// match the source text a written value is reported as.
+///
+/// Only `String` is derived. Its defaulting is per-case and carry-free, so a case that can't be read
+/// can't affect any other, and every legal spelling is a single-segment literal. That closes the case
+/// and lets a `String`-backed enum report a raw value on *every* case. `Int` continues
+/// from the preceding case's value (`case a = 1; case b` makes `b` 2), whether that value was written
+/// or itself derived, so one unreadable expression would corrupt every case after it. Deriving it
+/// partially would be worse than not deriving it, so integer-backed enums report only what's written
+/// and the consumer applies the continuation rule.
+private func derivedStringRawValue(for caseName: String, rawType: TypeNode?) -> String? {
+  // `String` is a `.primitive`, but a qualified `Swift.String` parses as a `.ref`, and both are legal
+  // raw types. Matching the trailing component covers each, the same way the conformance check does.
+  let name: String?
+  switch rawType {
+  case .primitive(let spelling, _), .ref(let spelling):
+    name = spelling.split(separator: ".").last.map(String.init)
+  default:
+    name = nil
+  }
+  guard name == "String" else {
+    return nil
+  }
+  return "\"\(caseName)\""
 }
 
 /// Protocols an `Enumerable` enum commonly adopts, which a syntactic scan would otherwise mistake for
