@@ -37,20 +37,21 @@ final class SurfaceVisitor: SyntaxVisitor {
   /// exclusive in practice, so the first match wins.
   private func classify(name: String, attributes: AttributeListSyntax, members: MemberBlockItemListSyntax) {
     if let attribute = attributes.firstAttribute(named: DetectedMacro.expoModule.rawValue) {
-      let (functions, properties, _) = collectJSMembers(members)
+      let (functions, properties, events, _) = collectJSMembers(members)
       modules.append(
         ExportedModule(
           name: name,
           jsName: stringArgument(of: attribute) ?? name,
           functions: functions,
           properties: properties,
+          events: events,
           file: file
         ))
       return
     }
 
     if let attribute = attributes.firstAttribute(named: DetectedMacro.sharedObject.rawValue) {
-      let (functions, properties, constructor) = collectJSMembers(members)
+      let (functions, properties, events, constructor) = collectJSMembers(members)
       sharedObjects.append(
         ExportedSharedObject(
           name: name,
@@ -58,6 +59,7 @@ final class SurfaceVisitor: SyntaxVisitor {
           constructorParameters: constructor,
           functions: functions,
           properties: properties,
+          events: events,
           file: file
         ))
       return
@@ -68,13 +70,17 @@ final class SurfaceVisitor: SyntaxVisitor {
     }
   }
 
-  /// The `@JS` members of a module / shared-object body: functions, properties, and the single
-  /// `@JS init` constructor parameters (`nil` when absent). Only declarations carrying `@JS` count.
+  /// The exported members of a module / shared-object body: `@JS` functions and properties, `@Event`
+  /// events, and the single `@JS init` constructor parameters (`nil` when absent).
   private func collectJSMembers(
     _ members: MemberBlockItemListSyntax
-  ) -> (functions: [ExportedFunction], properties: [ExportedProperty], constructor: [ExportedParameter]?) {
+  ) -> (
+    functions: [ExportedFunction], properties: [ExportedProperty], events: [ExportedEvent],
+    constructor: [ExportedParameter]?
+  ) {
     var functions: [ExportedFunction] = []
     var properties: [ExportedProperty] = []
+    var events: [ExportedEvent] = []
     var constructor: [ExportedParameter]?
 
     for member in members {
@@ -98,10 +104,52 @@ final class SurfaceVisitor: SyntaxVisitor {
       if let varDecl = decl.as(VariableDeclSyntax.self),
         let attribute = varDecl.attributes.firstAttribute(named: DetectedMacro.js.rawValue) {
         properties.append(contentsOf: makeProperties(varDecl: varDecl, attribute: attribute))
+        continue
+      }
+
+      if let varDecl = decl.as(VariableDeclSyntax.self),
+        let attribute = varDecl.attributes.firstAttribute(named: DetectedMacro.event.rawValue) {
+        events.append(contentsOf: makeEvents(varDecl: varDecl, attribute: attribute))
       }
     }
 
-    return (functions, properties, constructor)
+    return (functions, properties, events, constructor)
+  }
+
+  /// Builds the `ExportedEvent` entries for an `@Event var`, applying the same checks
+  /// `EventMacro.validatedEvent(of:on:)` does. A rejected declaration expands to no event, so
+  /// reporting one would describe a surface that does not exist. `@JS` on the same property is
+  /// caught by the caller, which reaches the `@JS` branch first.
+  private func makeEvents(varDecl: VariableDeclSyntax, attribute: AttributeSyntax) -> [ExportedEvent] {
+    guard varDecl.bindingSpecifier.tokenKind != .keyword(.let),
+      !isTypeLevel(varDecl.modifiers) else {
+      return []
+    }
+    let override = stringArgument(of: attribute)
+    let isSync = boolArgument(of: attribute, label: "sync") == true
+    var result: [ExportedEvent] = []
+
+    for binding in varDecl.bindings {
+      // Binding-level checks, in the macro's order: a named binding with a function type that takes
+      // at most one payload and returns Void, with no initializer or hand-written accessors.
+      guard let ident = binding.pattern.as(IdentifierPatternSyntax.self),
+        binding.initializer == nil,
+        binding.accessorBlock == nil,
+        let functionType = underlyingFunctionType(of: binding.typeAnnotation?.type),
+        isVoidEventReturn(functionType.returnClause.type),
+        functionType.parameters.count <= 1 else {
+        continue
+      }
+      let name = ident.identifier.text
+      result.append(
+        ExportedEvent(
+          name: name,
+          jsName: override ?? defaultEventName(for: name),
+          payload: functionType.parameters.first.map { typeNode(from: $0.type) },
+          isSync: isSync
+        ))
+    }
+    return result
   }
 
   /// Builds an `ExportedFunction` from a `@JS func`: JS-name fallback, parameters, a `Void` return as
@@ -236,6 +284,79 @@ final class SurfaceVisitor: SyntaxVisitor {
 // MARK: - Syntactic helpers (shared spelling with the macros)
 
 /// True when the modifiers make a member type-level (`static` or `class`).
+// MARK: - `@Event` helpers
+
+// The macro target can't be imported, so these are deliberate copies of `EventMacro`'s logic. They
+// must stay in step with it: a drift changes the reported surface without failing any build.
+
+/// The Swift name with a conventional `on` prefix stripped and the remainder decapitalized
+/// (`onStatusChange` -> `statusChange`); names without the prefix pass through verbatim. A drift
+/// from the macro's copy would produce listener names the module never emits.
+func defaultEventName(for swiftName: String) -> String {
+  guard swiftName.hasPrefix("on") else {
+    return swiftName
+  }
+  let rest = swiftName.dropFirst(2)
+  guard let first = rest.first, first.isUppercase else {
+    return swiftName
+  }
+  return decapitalized(String(rest))
+}
+
+/// Lowercases the leading uppercase run the way Swift's API importer does: a single leading capital
+/// is lowercased, and a longer acronym run keeps its last capital when a lowercase letter follows it
+/// (`StatusChange` -> `statusChange`, `URLChange` -> `urlChange`, `URL` -> `url`).
+private func decapitalized(_ name: String) -> String {
+  let runEnd = name.firstIndex { !$0.isUppercase } ?? name.endIndex
+  if name[..<runEnd].count > 1 && runEnd != name.endIndex {
+    let lastCapital = name.index(before: runEnd)
+    return name[..<lastCapital].lowercased() + name[lastCapital...]
+  }
+  return name[..<runEnd].lowercased() + name[runEnd...]
+}
+
+/// The function type underlying a property's type annotation, unwrapping attributes
+/// (`@Sendable (P) -> Void`) and single-element parentheses (`((P) -> Void)`). `nil` when the
+/// annotation is missing or isn't a function type.
+private func underlyingFunctionType(of type: TypeSyntax?) -> FunctionTypeSyntax? {
+  guard let type else {
+    return nil
+  }
+  if let attributed = type.as(AttributedTypeSyntax.self) {
+    return underlyingFunctionType(of: attributed.baseType)
+  }
+  if let tuple = type.as(TupleTypeSyntax.self),
+    tuple.elements.count == 1, let element = tuple.elements.first, element.firstName == nil {
+    return underlyingFunctionType(of: element.type)
+  }
+  return type.as(FunctionTypeSyntax.self)
+}
+
+/// True when an event's function type returns `Void`. The shared `isVoidType` is not reused: it
+/// accepts neither `Swift.Void` nor a parenthesized `(Void)`, so it would drop valid events.
+private func isVoidEventReturn(_ type: TypeSyntax) -> Bool {
+  if let tuple = type.as(TupleTypeSyntax.self), tuple.elements.count == 1,
+    let element = tuple.elements.first, element.firstName == nil {
+    return isVoidEventReturn(element.type)
+  }
+  let text = type.trimmedDescription
+  return text == "Void" || text == "()" || text == "Swift.Void"
+}
+
+/// The value of a labeled boolean macro argument (`@Event(sync: true)`), or `nil` when absent.
+private func boolArgument(of attribute: AttributeSyntax, label: String) -> Bool? {
+  guard let arguments = attribute.arguments?.as(LabeledExprListSyntax.self) else {
+    return nil
+  }
+  for argument in arguments where argument.label?.text == label {
+    guard let literal = argument.expression.as(BooleanLiteralExprSyntax.self) else {
+      return nil
+    }
+    return literal.literal.tokenKind == .keyword(.true)
+  }
+  return nil
+}
+
 private func isTypeLevel(_ modifiers: DeclModifierListSyntax) -> Bool {
   modifiers.contains {
     $0.name.tokenKind == .keyword(.static) || $0.name.tokenKind == .keyword(.class)

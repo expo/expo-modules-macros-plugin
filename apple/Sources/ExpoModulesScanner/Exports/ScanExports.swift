@@ -26,6 +26,9 @@ extension Scanner {
 /// surface plus the run's stats. Separate from the public entry so tests can drive it without
 /// argv/stdout. The shared `scanFiles` walk + pre-filter selects files; a `SurfaceVisitor` extracts
 /// each one.
+///
+/// The pre-filter omits `@Event`: an event only declares a member of one of these three types, so a
+/// file containing one already matches on its enclosing type.
 func scanExports(paths: [String]) -> ScanExportsResult {
   var modules: [ExportedModule] = []
   var sharedObjects: [ExportedSharedObject] = []

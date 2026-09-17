@@ -128,6 +128,36 @@ struct ExportedRecordProperty: Encodable, Equatable {
   }
 }
 
+/// One `@Event var` on a module or shared object: a typed event JS listens for with
+/// `addListener(jsName, …)` rather than calls.
+struct ExportedEvent: Encodable, Equatable {
+  /// The Swift property name, e.g. `onStatusChange`.
+  let name: String
+
+  /// The name JS listens under: the `@Event("x")` override, else `name` with a conventional `on`
+  /// prefix stripped and decapitalized (`onStatusChange` -> `statusChange`).
+  let jsName: String
+
+  /// The single payload parameter's type, or `nil` for a no-payload `() -> Void` event.
+  let payload: TypeNode?
+
+  /// `@Event(sync: true)`, dispatching inline on the JS thread instead of scheduling.
+  let isSync: Bool
+
+  private enum CodingKeys: String, CodingKey {
+    case name, jsName, payload
+    case isSync = "sync"
+  }
+
+  func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(name, forKey: .name)
+    try container.encode(jsName, forKey: .jsName)
+    try container.encodeIfPresent(payload, forKey: .payload)
+    try container.encode(isSync, forKey: .isSync)
+  }
+}
+
 /// A `@ExpoModule` type and its `@JS` surface.
 struct ExportedModule: Encodable, Equatable {
   /// The Swift class name.
@@ -138,6 +168,7 @@ struct ExportedModule: Encodable, Equatable {
 
   let functions: [ExportedFunction]
   let properties: [ExportedProperty]
+  let events: [ExportedEvent]
 
   /// Absolute source path, matching `scan-modules`.
   let file: String
@@ -156,6 +187,7 @@ struct ExportedSharedObject: Encodable, Equatable {
 
   let functions: [ExportedFunction]
   let properties: [ExportedProperty]
+  let events: [ExportedEvent]
 
   let file: String
 }
@@ -181,8 +213,8 @@ struct ExportedSurface: Encodable, Equatable {
 /// Version of the `scan-exports` output shape. Bumped on any breaking change to the envelope or to
 /// anything under `exports`, so a consumer can verify it understands the output before trusting it.
 /// Versioned independently of `scanModulesSchemaVersion`: the two commands serve different consumers
-/// and change for different reasons.
-let scanExportsSchemaVersion = 1
+/// and change for different reasons. Version 2 added `events` to modules and shared objects.
+let scanExportsSchemaVersion = 2
 
 /// The `scan-exports` result: the surface plus the run's stats. A distinct envelope from
 /// `ScanModulesResult` (different consumer: TS generation vs. autolinking).
