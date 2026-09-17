@@ -185,6 +185,135 @@ struct RecordSurfaceTests {
   }
 }
 
+@Suite("Exports surface: enums")
+struct EnumSurfaceTests {
+  @Test
+  func `Extracts an Enumerable enum's raw type and cases`() throws {
+    let enumeration = try #require(
+      surface(
+        """
+        enum Status: String, Enumerable {
+          case active = "active"
+          case idle
+        }
+        """
+      ).enums.first)
+
+    #expect(enumeration.name == "Status")
+    #expect(enumeration.rawType == .primitive(name: "String", jsType: .string))
+    #expect(enumeration.cases.map(\.name) == ["active", "idle"])
+    // Only an explicitly written raw value is reported; an implicit one is left to the consumer.
+    #expect(enumeration.cases.map(\.rawValue) == ["\"active\"", nil])
+  }
+
+  @Test
+  func `Reports an Int-backed enum and its written raw values`() throws {
+    let enumeration = try #require(
+      surface(
+        """
+        enum Priority: Int, Enumerable {
+          case low = 1
+          case high = 2
+        }
+        """
+      ).enums.first)
+
+    #expect(enumeration.rawType == .primitive(name: "Int", jsType: .number))
+    #expect(enumeration.cases.map(\.rawValue) == ["1", "2"])
+  }
+
+  @Test
+  func `Reports a bare Enumerable conformance with no raw type`() throws {
+    let enumeration = try #require(
+      surface(
+        """
+        enum Mode: Enumerable {
+          case on
+          case off
+        }
+        """
+      ).enums.first)
+
+    // Nothing precedes the conformance, so there's no raw type to report.
+    #expect(enumeration.rawType == nil)
+    #expect(enumeration.cases.map(\.name) == ["on", "off"])
+  }
+
+  @Test
+  func `Accepts a qualified Enumerable spelling`() {
+    let visitor = surface(
+      """
+      enum Status: String, ExpoModulesCore.Enumerable {
+        case active
+      }
+      """
+    )
+    #expect(visitor.enums.map(\.name) == ["Status"])
+  }
+
+  @Test
+  func `Ignores an enum that doesn't conform to Enumerable`() {
+    let visitor = surface(
+      """
+      enum Plain: String {
+        case a
+      }
+      enum Bare {
+        case b
+      }
+      """
+    )
+    // A raw value alone doesn't make an enum convertible: core keys on the conformance.
+    #expect(visitor.enums.isEmpty)
+  }
+
+  @Test
+  func `Ignores a nested Enumerable enum`() {
+    let visitor = surface(
+      """
+      @ExpoModule
+      final class M {
+        enum Status: String, Enumerable {
+          case active
+        }
+      }
+      """
+    )
+    // Top-level only, matching how every other type in the surface is collected.
+    #expect(visitor.enums.isEmpty)
+  }
+
+  @Test
+  func `Skips cases carrying associated values`() throws {
+    let enumeration = try #require(
+      surface(
+        """
+        enum Mixed: Enumerable {
+          case plain
+          case payload(Int)
+        }
+        """
+      ).enums.first)
+
+    // An associated value has no raw value, so it can't cross the boundary as one.
+    #expect(enumeration.cases.map(\.name) == ["plain"])
+  }
+
+  @Test
+  func `Reports each case of a multi-case declaration`() throws {
+    let enumeration = try #require(
+      surface(
+        """
+        enum Status: String, Enumerable {
+          case active, idle
+        }
+        """
+      ).enums.first)
+
+    #expect(enumeration.cases.map(\.name) == ["active", "idle"])
+  }
+}
+
 @Suite("Exports surface: events")
 struct EventSurfaceTests {
   @Test
@@ -435,11 +564,13 @@ struct SurfaceScopingTests {
       @ExpoModule final class M {}
       @SharedObject final class S: SharedObject {}
       @Record struct R { var x: Int = 0 }
+      enum E: String, Enumerable { case a }
       """
     )
     #expect(visitor.modules.map(\.name) == ["M"])
     #expect(visitor.sharedObjects.map(\.name) == ["S"])
     #expect(visitor.records.map(\.name) == ["R"])
+    #expect(visitor.enums.map(\.name) == ["E"])
   }
 }
 
@@ -470,17 +601,21 @@ struct ScanExportsTests {
       ("Module.swift", "@ExpoModule\nfinal class M { @JS func f() {} }"),
       ("Shared.swift", "@SharedObject\nfinal class S: SharedObject { @JS init() {} }"),
       ("Options.swift", "@Record\nstruct R { var name: String }"),
+      ("Status.swift", "enum E: String, Enumerable { case a }"),
       ("Plain.swift", "final class Plain {}"),
     ]) { result in
       #expect(result.exports.modules.map(\.name) == ["M"])
       #expect(result.exports.sharedObjects.map(\.name) == ["S"])
       #expect(result.exports.records.map(\.name) == ["R"])
+      // An enum in a file carrying no macro attribute is still found: the pre-filter admits it on
+      // the bare `Enumerable` conformance.
+      #expect(result.exports.enums.map(\.name) == ["E"])
       // Reported paths are absolute.
       #expect(result.exports.modules.first?.file.hasPrefix("/") == true)
       #expect(result.schemaVersion == scanExportsSchemaVersion)
-      // All four files are read; the plain one (no macro) isn't parsed.
-      #expect(result.stats.filesScanned == 4)
-      #expect(result.stats.filesParsed == 3)
+      // All five files are read; the plain one (no macro, no conformance) isn't parsed.
+      #expect(result.stats.filesScanned == 5)
+      #expect(result.stats.filesParsed == 4)
     }
   }
 }

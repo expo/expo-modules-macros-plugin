@@ -2,14 +2,17 @@ import Foundation
 import SwiftParser
 import SwiftSyntax
 
-/// Walks `paths`, and for each `.swift` file that might contain one of `macros` (the pre-filter passes
-/// it), reads the source and hands it to `process` along with the file path. Returns the run's stats.
+/// Walks `paths`, and for each `.swift` file that might contain one of `macros` or one of
+/// `conformances` (the pre-filter passes it), reads the source and hands it to `process` along with the
+/// file path. Returns the run's stats.
+///
 /// The shared core every scan command builds on: the walk, read, pre-filter, and stats are identical;
 /// only what each command does per parsed file differs (`scan-modules` collects `Detection`s,
 /// `scan-exports` walks a `SurfaceVisitor`), and that lives in `process`.
 func scanFiles(
   paths: [String],
   macros: Set<DetectedMacro>,
+  conformances: Set<String> = [],
   process: (_ source: String, _ file: String) -> Void
 ) -> ScanStats {
   let clock = ContinuousClock()
@@ -19,7 +22,7 @@ func scanFiles(
   var filesParsed = 0
 
   // Compile the pre-filter regex once per run, not once per file.
-  let prefilter = macroAttributeRegex(for: macros)
+  let prefilter = macroAttributeRegex(for: macros, conformances: conformances)
 
   for file in swiftFiles(in: paths) {
     guard let source = try? String(contentsOfFile: file, encoding: .utf8) else {
@@ -82,10 +85,23 @@ func detect(
 /// `@(ExpoModule|JS|Record|SharedObject)` for an `exports` scan. A precompiled `NSRegularExpression`
 /// benchmarked ~20x faster over a large source tree than calling `String.contains` once per macro
 /// name, because it scans each file in a single pass. Compiled once per run and reused per file.
-func macroAttributeRegex(for macros: Set<DetectedMacro>) -> NSRegularExpression {
+///
+/// `conformances` adds bare (unprefixed) alternatives for types recognized by conformance rather than
+/// by an attribute (`Enumerable` for `scan-exports`). They join the same alternation so the scan stays
+/// one pass; a bare name matches more loosely than an `@`-prefixed one, which costs a wasted parse and
+/// never a miss.
+func macroAttributeRegex(
+  for macros: Set<DetectedMacro>,
+  conformances: Set<String> = []
+) -> NSRegularExpression {
   // Sort for a stable pattern regardless of the set's iteration order.
-  let alternation = macros.map(\.rawValue).sorted().joined(separator: "|")
-  return try! NSRegularExpression(pattern: "@(\(alternation))")
+  let attributes = macros.map(\.rawValue).sorted().joined(separator: "|")
+  var alternatives: [String] = []
+  if !attributes.isEmpty {
+    alternatives.append("@(\(attributes))")
+  }
+  alternatives.append(contentsOf: conformances.sorted())
+  return try! NSRegularExpression(pattern: alternatives.joined(separator: "|"))
 }
 
 /// True if the source text contains one of the pre-filter's spelled macro attributes, so it's worth

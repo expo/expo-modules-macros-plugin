@@ -133,11 +133,36 @@ export interface ExportedRecord {
   file: string;
 }
 
+/** One case of a reported enum. */
+export interface ExportedEnumCase {
+  /** The case name as declared. */
+  name: string;
+  /**
+   * The explicitly written raw value's source text (`"active"`, `3`), absent when the case declares
+   * none. Swift's implicit raw values (a `String` case's own name, an `Int` case's ordinal) are left
+   * to the consumer to derive.
+   */
+  rawValue?: string;
+}
+
+/**
+ * An `Enumerable` enum: a type crossing the boundary as its raw value rather than as an object.
+ * Detected by conformance, not by a macro attribute, so it carries no `jsName`.
+ */
+export interface ExportedEnum {
+  name: string;
+  /** The raw value type as written, absent for a bare `Enumerable` conformance with no raw type. */
+  rawType?: TypeNode;
+  cases: ExportedEnumCase[];
+  file: string;
+}
+
 /** The exported types grouped by kind. */
 export interface ExportedSurface {
   modules: ExportedModule[];
   sharedObjects: ExportedSharedObject[];
   records: ExportedRecord[];
+  enums: ExportedEnum[];
 }
 
 /** A `#if` condition the scan couldn't answer statically. */
@@ -151,7 +176,7 @@ export interface ScanWarning {
 export interface ScanStats {
   /** `.swift` files the walk found and read. */
   filesScanned: number;
-  /** Of those, how many contained a macro attribute and so were parsed. */
+  /** Of those, how many matched the pre-filter (a macro attribute or a scanned conformance). */
   filesParsed: number;
   /** Wall-clock duration of the scan, in milliseconds. */
   durationMs: number;
@@ -203,4 +228,4 @@ export interface ScanExportsResult {
  * as a clear error instead of silently misread fields.
  */
 export const SUPPORTED_SCAN_MODULES_SCHEMA_VERSION = 2;
-export const SUPPORTED_SCAN_EXPORTS_SCHEMA_VERSION = 2;
+export const SUPPORTED_SCAN_EXPORTS_SCHEMA_VERSION = 3;

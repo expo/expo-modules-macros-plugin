@@ -202,19 +202,73 @@ struct ExportedRecord: Encodable, Equatable {
   let file: String
 }
 
+/// One case of a reported enum. A raw value is reported only when written explicitly; Swift's implicit
+/// raw values (a `String` case's own name, an `Int` case's ordinal) are left to the consumer to derive,
+/// because deriving them here would bake Swift's defaulting rules into the output shape.
+struct ExportedEnumCase: Encodable, Equatable {
+  /// The case name as declared.
+  let name: String
+
+  /// The explicitly written raw value's source text (`"active"`, `3`), or `nil` when the case declares
+  /// none. Kept as text because a syntactic scan can't evaluate the expression.
+  let rawValue: String?
+
+  private enum CodingKeys: String, CodingKey {
+    case name, rawValue
+  }
+
+  func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(name, forKey: .name)
+    try container.encodeIfPresent(rawValue, forKey: .rawValue)
+  }
+}
+
+/// An `Enumerable` enum: a type that crosses the boundary as its raw value rather than as an object.
+/// Detected by conformance, not by a macro attribute, because core converts it through its
+/// `RawRepresentable`/`Enumerable` conformance (`Coding/…+Enumerable`) with no macro involved.
+struct ExportedEnum: Encodable, Equatable {
+  /// The Swift enum name. No `jsName`: an enum carries no macro to spell an override on, and it
+  /// reaches JS as its raw values, not under a bound name.
+  let name: String
+
+  /// The raw value type as written (`String`, `Int`, …), or `nil` for a bare `Enumerable` conformance
+  /// with no raw type. A `nil` raw type is reported as-is rather than dropped: the enum is still
+  /// declared convertible, and the consumer decides how to treat it.
+  let rawType: TypeNode?
+
+  let cases: [ExportedEnumCase]
+
+  let file: String
+
+  private enum CodingKeys: String, CodingKey {
+    case name, rawType, cases, file
+  }
+
+  func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(name, forKey: .name)
+    try container.encodeIfPresent(rawType, forKey: .rawType)
+    try container.encode(cases, forKey: .cases)
+    try container.encode(file, forKey: .file)
+  }
+}
+
 /// The exported types grouped by kind, nested under `exports` in the result so the surface is one
 /// self-contained object separate from `stats`.
 struct ExportedSurface: Encodable, Equatable {
   let modules: [ExportedModule]
   let sharedObjects: [ExportedSharedObject]
   let records: [ExportedRecord]
+  let enums: [ExportedEnum]
 }
 
 /// Version of the `scan-exports` output shape. Bumped on any breaking change to the envelope or to
 /// anything under `exports`, so a consumer can verify it understands the output before trusting it.
 /// Versioned independently of `scanModulesSchemaVersion`: the two commands serve different consumers
-/// and change for different reasons. Version 2 added `events` to modules and shared objects.
-let scanExportsSchemaVersion = 2
+/// and change for different reasons. Version 2 added `events` to modules and shared objects; version 3
+/// added `enums`.
+let scanExportsSchemaVersion = 3
 
 /// The `scan-exports` result: the surface plus the run's stats. A distinct envelope from
 /// `ScanModulesResult` (different consumer: TS generation vs. autolinking).

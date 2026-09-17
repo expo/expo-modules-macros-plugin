@@ -10,6 +10,7 @@ final class SurfaceVisitor: SyntaxVisitor {
   private(set) var modules: [ExportedModule] = []
   private(set) var sharedObjects: [ExportedSharedObject] = []
   private(set) var records: [ExportedRecord] = []
+  private(set) var enums: [ExportedEnum] = []
 
   init(file: String) {
     self.file = file
@@ -28,6 +29,23 @@ final class SurfaceVisitor: SyntaxVisitor {
   override func visit(_ node: StructDeclSyntax) -> SyntaxVisitorContinueKind {
     if isTopLevel(node) {
       classify(name: node.name.text, attributes: node.attributes, members: node.memberBlock.members)
+    }
+    return .skipChildren
+  }
+
+  /// Enums are the one type recognized by *conformance* rather than by a macro attribute: an
+  /// `Enumerable` enum crosses the boundary through core's `RawRepresentable`/`Enumerable` converter,
+  /// with no macro in the picture. `@Union` enums are deliberately not collected here: they carry
+  /// associated values, not raw values, and model a TS union rather than a raw-value enum.
+  override func visit(_ node: EnumDeclSyntax) -> SyntaxVisitorContinueKind {
+    if isTopLevel(node), inherits(from: enumerableConformanceName, in: node.inheritanceClause) {
+      enums.append(
+        ExportedEnum(
+          name: node.name.text,
+          rawType: rawValueType(of: node.inheritanceClause),
+          cases: collectEnumCases(node.memberBlock.members),
+          file: file
+        ))
     }
     return .skipChildren
   }
@@ -256,6 +274,27 @@ final class SurfaceVisitor: SyntaxVisitor {
     return properties
   }
 
+  /// The declared cases of an enum, in source order. One `case` declaration can introduce several
+  /// cases (`case a, b`), so each element is read separately. A case carrying associated values is
+  /// skipped: it has no raw value, so it can't cross the boundary as one.
+  private func collectEnumCases(_ members: MemberBlockItemListSyntax) -> [ExportedEnumCase] {
+    var cases: [ExportedEnumCase] = []
+
+    for member in members {
+      guard let caseDecl = member.decl.as(EnumCaseDeclSyntax.self) else {
+        continue
+      }
+      for element in caseDecl.elements where element.parameterClause == nil {
+        cases.append(
+          ExportedEnumCase(
+            name: element.name.text,
+            rawValue: element.rawValue?.value.trimmedDescription
+          ))
+      }
+    }
+    return cases
+  }
+
   /// Projects a parameter clause into `ExportedParameter`s: label = first name, name = second (else
   /// first), and `optional` when it has a default value or an optional type.
   private func parameters(of clause: FunctionParameterClauseSyntax) -> [ExportedParameter] {
@@ -374,6 +413,34 @@ private func isExcludedRecordModifier(_ modifiers: DeclModifierListSyntax) -> Bo
       return false
     }
   }
+}
+
+/// The protocol whose conformance marks an enum as convertible at the JS boundary. Core converts such
+/// an enum through `Coding/…+Enumerable`, keyed on this conformance, so the scanner keys on it too.
+let enumerableConformanceName = "Enumerable"
+
+/// True when an inheritance clause names `name`. Matched on the trailing component of the written
+/// spelling, so a qualified `ExpoModulesCore.Enumerable` counts. Purely syntactic: a conformance added
+/// in a separate `extension`, or inherited through another protocol, is invisible to a scan and so is
+/// not reported.
+func inherits(from name: String, in clause: InheritanceClauseSyntax?) -> Bool {
+  guard let clause else {
+    return false
+  }
+  return clause.inheritedTypes.contains { inherited in
+    inherited.type.trimmedDescription.split(separator: ".").last.map(String.init) == name
+  }
+}
+
+/// The raw value type of an enum: the first inherited type that isn't the `Enumerable` conformance
+/// itself. Swift requires the raw type to be written first, so anything after it is a protocol. `nil`
+/// when the enum declares no raw type (`enum E: Enumerable`).
+func rawValueType(of clause: InheritanceClauseSyntax?) -> TypeNode? {
+  guard let first = clause?.inheritedTypes.first?.type,
+    first.trimmedDescription.split(separator: ".").last.map(String.init) != enumerableConformanceName else {
+    return nil
+  }
+  return typeNode(from: first)
 }
 
 /// True when a type is written as an optional: `T?`, `T!`, or `Optional<T>`, mirroring the macros'
