@@ -8,6 +8,7 @@ enum DetectedMacro: String, Codable, CaseIterable {
   case event = "Event"
   case sharedObject = "SharedObject"
   case record = "Record"
+  case union = "Union"
 }
 
 /// A single argument passed to a macro, e.g. `"Foo"` or `classes: [Bar.self]`. The label is `nil`

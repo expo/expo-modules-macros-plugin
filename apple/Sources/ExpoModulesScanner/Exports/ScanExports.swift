@@ -22,10 +22,9 @@ extension Scanner {
   }
 }
 
-/// Scans `paths` for `@ExpoModule`, `@SharedObject`, and `@Record` types plus `Enumerable` enums, and
-/// returns their exported surface plus the run's stats. Separate from the public entry so tests can
-/// drive it without argv/stdout. The shared `scanFiles` walk + pre-filter selects files; a
-/// `SurfaceVisitor` extracts each one.
+/// Scans `paths` for `@ExpoModule`, `@SharedObject`, `@Record`, and `@Union` types plus `Enumerable`
+/// enums, and returns their exported surface plus the run's stats. Separate from the public entry so
+/// tests can drive it without argv/stdout.
 ///
 /// The pre-filter omits `@Event`: an event only declares a member of one of these three types, so a
 /// file containing one already matches on its enclosing type. It does include `Enumerable`, which is a
@@ -36,10 +35,11 @@ func scanExports(paths: [String]) -> ScanExportsResult {
   var sharedObjects: [ExportedSharedObject] = []
   var records: [ExportedRecord] = []
   var enums: [ExportedEnum] = []
+  var unions: [ExportedUnion] = []
 
   let stats = scanFiles(
     paths: paths,
-    macros: [.expoModule, .sharedObject, .record],
+    macros: [.expoModule, .sharedObject, .record, .union],
     conformances: [enumerableConformanceName]
   ) { source, file in
     let tree = Parser.parse(source: source)
@@ -49,12 +49,14 @@ func scanExports(paths: [String]) -> ScanExportsResult {
     sharedObjects.append(contentsOf: visitor.sharedObjects)
     records.append(contentsOf: visitor.records)
     enums.append(contentsOf: visitor.enums)
+    unions.append(contentsOf: visitor.unions)
   }
 
   return ScanExportsResult(
     schemaVersion: scanExportsSchemaVersion,
     exports: ExportedSurface(
-      modules: modules, sharedObjects: sharedObjects, records: records, enums: enums),
+      modules: modules, sharedObjects: sharedObjects, records: records, enums: enums,
+      unions: unions),
     stats: stats
   )
 }

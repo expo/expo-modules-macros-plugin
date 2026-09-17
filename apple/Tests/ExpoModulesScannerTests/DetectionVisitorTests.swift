@@ -251,6 +251,7 @@ struct MacroPrefilterTests {
     #expect(mightContainMacro(in: "@SharedObject\nclass C: SharedObject {}"))
     #expect(mightContainMacro(in: "struct S {\n  @JS func f() {}\n}"))
     #expect(mightContainMacro(in: "@Record\nstruct Options {}"))
+    #expect(mightContainMacro(in: "@Union\nenum Source { case text(String) }"))
   }
 
   @Test

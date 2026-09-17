@@ -450,6 +450,198 @@ struct EnumSurfaceTests {
   }
 }
 
+@Suite("Exports surface: unions")
+struct UnionSurfaceTests {
+  @Test
+  func `Extracts a union's members in declaration order`() throws {
+    let union = try #require(
+      surface(
+        """
+        @Union
+        enum Source {
+          case text(String)
+          case count(Int)
+          case options(SourceOptions)
+        }
+        """
+      ).unions.first)
+
+    #expect(union.name == "Source")
+    #expect(union.members.map(\.name) == ["text", "count", "options"])
+    #expect(
+      union.members.map(\.type) == [
+        .primitive(name: "String", jsType: .string),
+        .primitive(name: "Int", jsType: .number),
+        .ref(name: "SourceOptions"),
+      ])
+  }
+
+  @Test
+  func `Keeps declaration order, which decides which overlapping payload wins`() throws {
+    let union = try #require(
+      surface(
+        """
+        @Union
+        enum Number {
+          case whole(Int)
+          case fractional(Double)
+        }
+        """
+      ).unions.first)
+
+    // Decode takes the first payload that succeeds, so the reported order is the decode order. A
+    // consumer that reorders these describes a different union.
+    #expect(union.members.map(\.name) == ["whole", "fractional"])
+  }
+
+  @Test
+  func `Reports a labeled associated value by its type`() throws {
+    let union = try #require(
+      surface(
+        """
+        @Union
+        enum Identifier {
+          case id(value: Int)
+        }
+        """
+      ).unions.first)
+
+    // The label is Swift-side construction detail; the boundary only sees the payload type.
+    #expect(union.members.map(\.name) == ["id"])
+    #expect(union.members.map(\.type) == [.primitive(name: "Int", jsType: .number)])
+  }
+
+  @Test
+  func `Skips cases the macro rejects`() throws {
+    let union = try #require(
+      surface(
+        """
+        @Union
+        enum Mixed {
+          case text(String)
+          case none
+          case pair(Int, Int)
+          case defaulted(Int = 0)
+        }
+        """
+      ).unions.first)
+
+    // Each of the three is a macro error, so no such alternative exists at runtime and reporting one
+    // would describe a union the module never accepts.
+    #expect(union.members.map(\.name) == ["text"])
+  }
+
+  @Test
+  func `Reports each case of a multi-case declaration`() throws {
+    let union = try #require(
+      surface(
+        """
+        @Union
+        enum Source {
+          case text(String), count(Int)
+        }
+        """
+      ).unions.first)
+
+    #expect(union.members.map(\.name) == ["text", "count"])
+  }
+
+  @Test
+  func `Ignores an enum without the @Union attribute`() {
+    let visitor = surface(
+      """
+      enum Plain {
+        case text(String)
+      }
+      enum Raw: String {
+        case a
+      }
+      """
+    )
+    // Detection is attribute-driven: no @Union, no report.
+    #expect(visitor.unions.isEmpty)
+  }
+
+  @Test
+  func `Reports an enum that is both @Union and Enumerable only as a union`() {
+    let visitor = surface(
+      """
+      @Union
+      enum Weird: String, Enumerable {
+        case text(String)
+      }
+      """
+    )
+
+    // @Union is checked first and wins. Its cases carry payloads rather than raw values, so there
+    // would be nothing to report as an enum, and reporting the type in both arrays would describe two
+    // contradictory JS types for one declaration.
+    #expect(visitor.unions.map(\.name) == ["Weird"])
+    #expect(visitor.enums.isEmpty)
+  }
+
+  @Test
+  func `Reports a union and an Enumerable enum side by side`() {
+    let visitor = surface(
+      """
+      @Union
+      enum Source {
+        case text(String)
+      }
+
+      enum Status: String, Enumerable {
+        case active
+      }
+      """
+    )
+
+    // The two kinds coexist in one file: one recognized by attribute, the other by conformance.
+    #expect(visitor.unions.map(\.name) == ["Source"])
+    #expect(visitor.enums.map(\.name) == ["Status"])
+  }
+
+  @Test
+  func `Ignores a nested @Union`() {
+    let visitor = surface(
+      """
+      @ExpoModule
+      final class M {
+        @Union
+        enum Source {
+          case text(String)
+        }
+      }
+      """
+    )
+    // Top-level only, matching how every other type in the surface is collected.
+    #expect(visitor.unions.isEmpty)
+  }
+
+  @Test
+  func `Reports a union whose payloads are composed types`() throws {
+    let union = try #require(
+      surface(
+        """
+        @Union
+        enum Payload {
+          case many([String])
+          case maybe(Int?)
+          case table([String: Double])
+        }
+        """
+      ).unions.first)
+
+    #expect(
+      union.members.map(\.type) == [
+        .array(element: .primitive(name: "String", jsType: .string)),
+        .optional(wrapped: .primitive(name: "Int", jsType: .number)),
+        .dictionary(
+          key: .primitive(name: "String", jsType: .string),
+          value: .primitive(name: "Double", jsType: .number)),
+      ])
+  }
+}
+
 @Suite("Exports surface: events")
 struct EventSurfaceTests {
   @Test
@@ -701,12 +893,14 @@ struct SurfaceScopingTests {
       @SharedObject final class S: SharedObject {}
       @Record struct R { var x: Int = 0 }
       enum E: String, Enumerable { case a }
+      @Union enum U { case a(Int) }
       """
     )
     #expect(visitor.modules.map(\.name) == ["M"])
     #expect(visitor.sharedObjects.map(\.name) == ["S"])
     #expect(visitor.records.map(\.name) == ["R"])
     #expect(visitor.enums.map(\.name) == ["E"])
+    #expect(visitor.unions.map(\.name) == ["U"])
   }
 }
 
@@ -738,6 +932,7 @@ struct ScanExportsTests {
       ("Shared.swift", "@SharedObject\nfinal class S: SharedObject { @JS init() {} }"),
       ("Options.swift", "@Record\nstruct R { var name: String }"),
       ("Status.swift", "enum E: String, Enumerable { case a }"),
+      ("Source.swift", "@Union\nenum U { case text(String) }"),
       ("Plain.swift", "final class Plain {}"),
     ]) { result in
       #expect(result.exports.modules.map(\.name) == ["M"])
@@ -746,12 +941,13 @@ struct ScanExportsTests {
       // An enum in a file carrying no macro attribute is still found: the pre-filter admits it on
       // the bare `Enumerable` conformance.
       #expect(result.exports.enums.map(\.name) == ["E"])
+      #expect(result.exports.unions.map(\.name) == ["U"])
       // Reported paths are absolute.
       #expect(result.exports.modules.first?.file.hasPrefix("/") == true)
       #expect(result.schemaVersion == scanExportsSchemaVersion)
-      // All five files are read; the plain one (no macro, no conformance) isn't parsed.
-      #expect(result.stats.filesScanned == 5)
-      #expect(result.stats.filesParsed == 4)
+      // All six files are read; the plain one (no macro, no conformance) isn't parsed.
+      #expect(result.stats.filesScanned == 6)
+      #expect(result.stats.filesParsed == 5)
     }
   }
 }
