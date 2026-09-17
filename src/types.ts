@@ -163,12 +163,37 @@ export interface ExportedEnum {
   file: string;
 }
 
+/**
+ * One alternative a `@Union` may hold. Not a member in the sense a module or shared object has members
+ * (functions, properties, events).
+ */
+export interface ExportedUnionMember {
+  /** The Swift case name. Swift-side only: discrimination is structural, so it never reaches JS. */
+  name: string;
+  /** The associated value's type: what this alternative decodes from. */
+  type: TypeNode;
+}
+
+/**
+ * A `@Union` enum: a typed union of its members' payload types (`A | B | C`).
+ *
+ * `members` is ordered, and the order is part of the contract: decode takes the first payload that
+ * succeeds, so where two shapes overlap (`Int` and `Double`, two compatible records) the earlier one
+ * wins. Reordering them describes a different union than the one the module runs.
+ */
+export interface ExportedUnion {
+  name: string;
+  members: ExportedUnionMember[];
+  file: string;
+}
+
 /** The exported types grouped by kind. */
 export interface ExportedSurface {
   modules: ExportedModule[];
   sharedObjects: ExportedSharedObject[];
   records: ExportedRecord[];
   enums: ExportedEnum[];
+  unions: ExportedUnion[];
 }
 
 /** A `#if` condition the scan couldn't answer statically. */
@@ -234,4 +259,4 @@ export interface ScanExportsResult {
  * as a clear error instead of silently misread fields.
  */
 export const SUPPORTED_SCAN_MODULES_SCHEMA_VERSION = 2;
-export const SUPPORTED_SCAN_EXPORTS_SCHEMA_VERSION = 3;
+export const SUPPORTED_SCAN_EXPORTS_SCHEMA_VERSION = 4;

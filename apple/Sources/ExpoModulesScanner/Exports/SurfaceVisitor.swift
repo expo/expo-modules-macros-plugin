@@ -11,6 +11,7 @@ final class SurfaceVisitor: SyntaxVisitor {
   private(set) var sharedObjects: [ExportedSharedObject] = []
   private(set) var records: [ExportedRecord] = []
   private(set) var enums: [ExportedEnum] = []
+  private(set) var unions: [ExportedUnion] = []
 
   init(file: String) {
     self.file = file
@@ -33,12 +34,25 @@ final class SurfaceVisitor: SyntaxVisitor {
     return .skipChildren
   }
 
-  /// Enums are the one type recognized by *conformance* rather than by a macro attribute: an
-  /// `Enumerable` enum crosses the boundary through core's `RawRepresentable`/`Enumerable` converter,
-  /// with no macro in the picture. `@Union` enums are deliberately not collected here: they carry
-  /// associated values, not raw values, and model a TS union rather than a raw-value enum.
+  /// The two kinds of enum the surface reports: a `@Union` by its attribute, an `Enumerable` enum by
+  /// its conformance (core converts it with no macro involved, so there is no attribute to key on).
+  ///
+  /// `@Union` wins when a type carries both. Its cases hold payloads rather than raw values, so there
+  /// would be nothing to report as an enum, and listing it in both arrays would describe two
+  /// contradictory JS types for one declaration.
   override func visit(_ node: EnumDeclSyntax) -> SyntaxVisitorContinueKind {
-    if isTopLevel(node), inherits(from: enumerableConformanceName, in: node.inheritanceClause) {
+    guard isTopLevel(node) else {
+      return .skipChildren
+    }
+
+    if node.attributes.firstAttribute(named: DetectedMacro.union.rawValue) != nil {
+      unions.append(
+        ExportedUnion(
+          name: node.name.text,
+          members: collectUnionMembers(node.memberBlock.members),
+          file: file
+        ))
+    } else if inherits(from: enumerableConformanceName, in: node.inheritanceClause) {
       let rawType = rawValueType(of: node.inheritanceClause)
       enums.append(
         ExportedEnum(
@@ -302,6 +316,32 @@ final class SurfaceVisitor: SyntaxVisitor {
       }
     }
     return cases
+  }
+
+  /// The alternatives of a `@Union`, in declaration order (the decode depends on it). Skips the cases
+  /// `UnionMacro.validatedUnion(of:)` rejects (no associated value, more than one, or a default), since
+  /// those don't exist at runtime. The scanner never diagnoses, it just declines to report.
+  ///
+  /// A generic `@Union` is rejected wholesale by the macro but still reported, since the declaration
+  /// names a type a consumer may meet.
+  private func collectUnionMembers(_ members: MemberBlockItemListSyntax) -> [ExportedUnionMember] {
+    var result: [ExportedUnionMember] = []
+
+    for member in members {
+      guard let caseDecl = member.decl.as(EnumCaseDeclSyntax.self) else {
+        continue
+      }
+      for element in caseDecl.elements {
+        guard let parameters = element.parameterClause?.parameters,
+          parameters.count == 1, let parameter = parameters.first,
+          parameter.defaultValue == nil else {
+          continue
+        }
+        result.append(
+          ExportedUnionMember(name: element.name.text, type: typeNode(from: parameter.type)))
+      }
+    }
+    return result
   }
 
   /// Projects a parameter clause into `ExportedParameter`s: label = first name, name = second (else

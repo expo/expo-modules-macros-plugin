@@ -260,6 +260,38 @@ struct ExportedEnum: Encodable, Equatable {
   }
 }
 
+/// One alternative a `@Union` may hold: the Swift case name plus its payload type. Not a member in the
+/// sense a module or shared object has members (functions, properties, events).
+struct ExportedUnionMember: Encodable, Equatable {
+  /// The case name as declared. Swift-side only: discrimination is structural, so it never reaches JS,
+  /// but it ties an alternative back to the declaration.
+  let name: String
+
+  /// The associated value's type: what this alternative decodes from. Named `type` like every other
+  /// type-valued field here; `payload` already means an event's argument type on `ExportedEvent`.
+  let type: TypeNode
+
+  private enum CodingKeys: String, CodingKey {
+    case name, type
+  }
+}
+
+/// A `@Union` enum: a typed union of its cases' payload types (`A | B | C` in TypeScript).
+///
+/// **`members` is ordered, and the order is part of the contract.** Decode tries each payload in
+/// declaration order and takes the first that succeeds, so where two shapes overlap (`Int` and
+/// `Double`, two compatible records) the earlier case wins. Reordering them describes a different
+/// union than the one the module runs.
+struct ExportedUnion: Encodable, Equatable {
+  /// The Swift enum name. No `jsName`: `@Union` takes no arguments, and a union reaches JS as its
+  /// payload types rather than under a bound name.
+  let name: String
+
+  let members: [ExportedUnionMember]
+
+  let file: String
+}
+
 /// The exported types grouped by kind, nested under `exports` in the result so the surface is one
 /// self-contained object separate from `stats`.
 struct ExportedSurface: Encodable, Equatable {
@@ -267,14 +299,15 @@ struct ExportedSurface: Encodable, Equatable {
   let sharedObjects: [ExportedSharedObject]
   let records: [ExportedRecord]
   let enums: [ExportedEnum]
+  let unions: [ExportedUnion]
 }
 
 /// Version of the `scan-exports` output shape. Bumped on any breaking change to the envelope or to
 /// anything under `exports`, so a consumer can verify it understands the output before trusting it.
 /// Versioned independently of `scanModulesSchemaVersion`: the two commands serve different consumers
 /// and change for different reasons. Version 2 added `events` to modules and shared objects; version 3
-/// added `enums`.
-let scanExportsSchemaVersion = 3
+/// added `enums`; version 4 added `unions`.
+let scanExportsSchemaVersion = 4
 
 /// The `scan-exports` result: the surface plus the run's stats. A distinct envelope from
 /// `ScanModulesResult` (different consumer: TS generation vs. autolinking).
