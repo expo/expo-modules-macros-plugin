@@ -526,7 +526,7 @@ private func derivedStringRawValue(for caseName: String, rawType: TypeNode?) -> 
   // raw types. Matching the trailing component covers each, the same way the conformance check does.
   let name: String?
   switch rawType {
-  case .primitive(let spelling, _), .ref(let spelling):
+  case .primitive(let spelling, _), .ref(let spelling, _, _):
     name = spelling.split(separator: ".").last.map(String.init)
   default:
     name = nil

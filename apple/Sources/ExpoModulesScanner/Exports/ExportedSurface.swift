@@ -306,8 +306,9 @@ struct ExportedSurface: Encodable, Equatable {
 /// anything under `exports`, so a consumer can verify it understands the output before trusting it.
 /// Versioned independently of `scanModulesSchemaVersion`: the two commands serve different consumers
 /// and change for different reasons. Version 2 added `events` to modules and shared objects; version 3
-/// added `enums`; version 4 added `unions`.
-let scanExportsSchemaVersion = 4
+/// added `enums`; version 4 added `unions`; version 5 resolves refs, adding `refKind` and correcting
+/// an enum ref's `typeof`.
+let scanExportsSchemaVersion = 5
 
 /// The `scan-exports` result: the surface plus the run's stats. A distinct envelope from
 /// `ScanModulesResult` (different consumer: TS generation vs. autolinking).

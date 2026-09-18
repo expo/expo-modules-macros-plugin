@@ -951,3 +951,150 @@ struct ScanExportsTests {
     }
   }
 }
+
+@Suite("Ref resolution")
+struct RefResolutionTests {
+  /// Runs a full `scanExports` over one source file so refs resolve, then returns the surface. Ref
+  /// resolution is a whole-scan pass, so it can't be exercised through `SurfaceVisitor` alone.
+  private func resolvedSurface(_ source: String) throws -> ExportedSurface {
+    let fileManager = FileManager.default
+    let root = fileManager.temporaryDirectory.appendingPathComponent("scanner-refs-\(ProcessInfo.processInfo.globallyUniqueString)")
+    try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? fileManager.removeItem(at: root) }
+    try source.write(to: root.appendingPathComponent("Source.swift"), atomically: true, encoding: .utf8)
+    return scanExports(paths: [root.path]).exports
+  }
+
+  /// The parameter types of the first function on the first module, keyed by parameter name.
+  private func parameterTypes(_ surface: ExportedSurface) throws -> [String: TypeNode] {
+    let function = try #require(surface.modules.first?.functions.first)
+    return Dictionary(uniqueKeysWithValues: function.parameters.map { ($0.name, $0.type) })
+  }
+
+  @Test
+  func `Stamps each ref with the kind that declares it`() throws {
+    let surface = try resolvedSurface(
+      """
+      enum Status: String, Enumerable { case playing }
+      @Union enum Source { case text(String) }
+      @Record struct Options { var name: String }
+      @SharedObject final class Player: SharedObject {}
+
+      @ExpoModule
+      final class M {
+        @JS func f(s: Status, u: Source, o: Options, p: Player, x: CGPoint) {}
+      }
+      """
+    )
+    let types = try parameterTypes(surface)
+
+    #expect(types["s"] == .ref(name: "Status", refKind: .enum, jsTypeOverride: .string))
+    #expect(types["u"] == .ref(name: "Source", refKind: .union))
+    #expect(types["o"] == .ref(name: "Options", refKind: .record))
+    #expect(types["p"] == .ref(name: "Player", refKind: .sharedObject))
+    // A name the scan never declared stays unresolved: a platform convertible the consumer resolves
+    // against its own catalog, not an error.
+    #expect(types["x"] == .ref(name: "CGPoint"))
+  }
+
+  @Test
+  func `An enum ref reports the category its raw value crosses as`() throws {
+    let surface = try resolvedSurface(
+      """
+      enum Status: String, Enumerable { case playing }
+      enum Priority: Int, Enumerable { case low }
+      enum Mode: Enumerable { case on }
+
+      @ExpoModule
+      final class M {
+        @JS func f(a: Status, b: Priority, c: Mode) {}
+      }
+      """
+    )
+    let types = try parameterTypes(surface)
+
+    // The correction only the scanner can make: the category comes from the declaration's rawType,
+    // which a node parsed at a use site never saw.
+    #expect(types["a"]?.jsType == .string)
+    #expect(types["b"]?.jsType == .number)
+    // A bare Enumerable conformance has no raw type to go on, so it stays an object.
+    #expect(types["c"]?.jsType == .object)
+  }
+
+  @Test
+  func `Resolves refs nested inside containers`() throws {
+    let surface = try resolvedSurface(
+      """
+      enum Status: String, Enumerable { case playing }
+
+      @ExpoModule
+      final class M {
+        @JS func f(a: [Status], b: Status?, c: [String: Status]) {}
+      }
+      """
+    )
+    let types = try parameterTypes(surface)
+    let resolved = TypeNode.ref(name: "Status", refKind: .enum, jsTypeOverride: .string)
+
+    #expect(types["a"] == .array(element: resolved))
+    #expect(types["b"] == .optional(wrapped: resolved))
+    #expect(types["c"] == .dictionary(key: .primitive(name: "String", jsType: .string), value: resolved))
+    // An optional reports its wrapped value's category, so the correction shows through.
+    #expect(types["b"]?.jsType == .string)
+  }
+
+  @Test
+  func `Resolves refs across files and in every reported position`() throws {
+    let surface = try resolvedSurface(
+      """
+      @Record struct Options { var name: String }
+      enum Status: String, Enumerable { case playing }
+
+      @Record
+      struct Wrapper { var options: Options }
+
+      @Union
+      enum Source { case options(Options) }
+
+      @ExpoModule
+      final class M {
+        @JS var status: Status = .playing
+        @JS func f() -> Options { Options(name: "") }
+        @Event var onChange: (Status) -> Void
+      }
+      """
+    )
+
+    // A return type, a property type, an event payload, a record field, and a union member all go
+    // through the same pass.
+    let module = try #require(surface.modules.first)
+    #expect(module.functions.first?.returns == .ref(name: "Options", refKind: .record))
+    #expect(module.properties.first?.type == .ref(name: "Status", refKind: .enum, jsTypeOverride: .string))
+    #expect(module.events.first?.payload == .ref(name: "Status", refKind: .enum, jsTypeOverride: .string))
+
+    let wrapper = try #require(surface.records.first { $0.name == "Wrapper" })
+    #expect(wrapper.properties.first?.type == .ref(name: "Options", refKind: .record))
+
+    let union = try #require(surface.unions.first)
+    #expect(union.members.first?.type == .ref(name: "Options", refKind: .record))
+  }
+
+  @Test
+  func `Resolves a qualified use site to its bare declaration`() throws {
+    let surface = try resolvedSurface(
+      """
+      enum Status: String, Enumerable { case playing }
+
+      @ExpoModule
+      final class M {
+        @JS func f(s: Media.Status) {}
+      }
+      """
+    )
+    let types = try parameterTypes(surface)
+
+    // A qualified spelling names the same type; matching the trailing component is how the
+    // conformance and raw-type checks already work.
+    #expect(types["s"] == .ref(name: "Media.Status", refKind: .enum, jsTypeOverride: .string))
+  }
+}

@@ -38,8 +38,22 @@ export type TypeNode =
       async: boolean;
       throws: boolean;
     }
-  /** Any other named type (record, shared object, enum, ...); `name` may be qualified. */
-  | { kind: 'ref'; typeof: JSType; name: string }
+  /**
+   * Any other named type; `name` may be qualified.
+   *
+   * `refKind` says which of this surface's arrays declares that name, so you don't have to look it
+   * up. It is absent when the scan declares no such type: a platform convertible (`CGPoint`, `URL`)
+   * or a type from another module, which your own catalog resolves.
+   *
+   * `typeof` follows the resolved kind, so a raw-value enum reports `string` or `number` rather than
+   * `object`. Only the scanner can determine that, since it comes from the declaration's `rawType`.
+   */
+  | {
+      kind: 'ref';
+      typeof: JSType;
+      name: string;
+      refKind?: 'record' | 'sharedObject' | 'enum' | 'union';
+    }
   /** A type the scanner couldn't interpret; `text` is its source spelling. */
   | { kind: 'unknown'; text: string };
 
@@ -259,4 +273,4 @@ export interface ScanExportsResult {
  * as a clear error instead of silently misread fields.
  */
 export const SUPPORTED_SCAN_MODULES_SCHEMA_VERSION = 2;
-export const SUPPORTED_SCAN_EXPORTS_SCHEMA_VERSION = 4;
+export const SUPPORTED_SCAN_EXPORTS_SCHEMA_VERSION = 5;
